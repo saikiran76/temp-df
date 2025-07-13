@@ -2,4 +2,5 @@
 export { NotificationBadge } from './NotificationBadge';
 export { NotificationPopover } from './NotificationPopover';
 export { WhatsAppNotifications } from './WhatsAppNotifications';
-export { TelegramNotifications } from './TelegramNotifications'; 
+export { TelegramNotifications } from './TelegramNotifications';
+export { LinkedInNotifications } from './LinkedinNotifications'; 

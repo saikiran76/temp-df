@@ -2,7 +2,7 @@ import React from "react";
 import { useInboxNotifications } from "@liveblocks/react";
 
 interface NotificationBadgeProps {
-  platform?: 'whatsapp' | 'telegram';
+  platform?: 'whatsapp' | 'telegram' | 'linkedin';
 }
 
 export function NotificationBadge({ platform = 'whatsapp' }: NotificationBadgeProps) {
@@ -11,7 +11,19 @@ export function NotificationBadge({ platform = 'whatsapp' }: NotificationBadgePr
   const getFilteredCount = () => {
     if (!inboxNotifications) return 0;
 
-    const platformPrefix = platform === 'telegram' ? '$telegram' : '$whatsapp';
+    let platformPrefix = '';
+    switch (platform) {
+      case 'telegram':
+        platformPrefix = '$telegram';
+        break;
+      case 'linkedin':
+        platformPrefix = '$linkedin';
+        break;
+      case 'whatsapp':
+      default:
+        platformPrefix = '$whatsapp';
+        break;
+    }
     
     return inboxNotifications.filter((notification) => {
       // Filter by platform
@@ -26,7 +38,8 @@ export function NotificationBadge({ platform = 'whatsapp' }: NotificationBadgePr
         const displayName = String(activityData.contact_display_name || activityData.sender || '').toLowerCase();
         if (displayName.includes('bridge bot') || 
             displayName.includes('telegram bridge') ||
-            displayName.includes('whatsapp bridge')) {
+            displayName.includes('whatsapp bridge') ||
+            displayName.includes('linkedin bridge')) {
           return false; // Exclude bridge bot notifications from badge count
         }
       }
@@ -39,10 +52,20 @@ export function NotificationBadge({ platform = 'whatsapp' }: NotificationBadgePr
 
   if (count === 0) return null;
 
+  const getBadgeColor = () => {
+    switch (platform) {
+      case 'telegram':
+        return 'bg-blue-500';
+      case 'linkedin':
+        return 'bg-blue-600';
+      case 'whatsapp':
+      default:
+        return 'bg-green-500';
+    }
+  };
+
   return (
-    <span className={`absolute -top-1 -right-1 h-5 w-5 rounded-full text-xs font-medium flex items-center justify-center text-white ${
-      platform === 'telegram' ? 'bg-blue-500' : 'bg-green-500'
-    }`}>
+    <span className={`absolute -top-1 -right-1 h-5 w-5 rounded-full text-xs font-medium flex items-center justify-center text-white ${getBadgeColor()}`}>
       {count > 99 ? '99+' : count}
     </span>
   );

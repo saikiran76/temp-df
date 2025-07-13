@@ -2,7 +2,7 @@ import React, { Suspense, useCallback } from "react";
 import { useInboxNotifications, useMarkInboxNotificationAsRead } from "@liveblocks/react/suspense";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { MessageSquare, AtSign, UserPlus, Users, Check, CheckCheck, Send } from "lucide-react";
+import { MessageSquare, AtSign, UserPlus, Users, Check, CheckCheck } from "lucide-react";
 import { format } from "date-fns";
 
 // Custom notification renderer for Telegram messages
@@ -30,34 +30,38 @@ const TelegramMessageNotification = ({ notification, onNotificationClick }: any)
   const getIcon = () => {
     switch (kind) {
       case '$telegramMessage':
-        return <Send className="h-4 w-4 text-blue-600" />;
+        return <MessageSquare className="h-5 w-5 text-blue-500" />;
       case '$telegramMention':
-        return <AtSign className="h-4 w-4 text-blue-600" />;
-      case '$telegramNewContact':
-        return <UserPlus className="h-4 w-4 text-purple-600" />;
-      case '$telegramGroupInvite':
-        return <Users className="h-4 w-4 text-orange-600" />;
+        return <AtSign className="h-5 w-5 text-blue-600" />;
+      case '$newContact':
+        return <UserPlus className="h-5 w-5 text-purple-600" />;
+      case '$groupInvite':
+        return <Users className="h-5 w-5 text-orange-600" />;
       default:
-        return <Send className="h-4 w-4 text-gray-600" />;
+        return <MessageSquare className="h-5 w-5 text-gray-600" />;
     }
   };
 
-  const getTitle = () => {
+  const getSenderName = () => {
     // Use the new `contact_display_name` field from the backend, with a fallback
-    const sender = safeActivityData.contact_display_name || safeActivityData.sender || 'Unknown sender';
+    return safeActivityData.contact_display_name || safeActivityData.sender || 'Unknown sender';
+  };
+
+  const getTitle = () => {
+    const sender = getSenderName();
     const contactName = safeActivityData.contactName || 'Unknown contact';
     
     switch (kind) {
       case '$telegramMessage':
-        return `New message from ${sender}`;
+        return sender;
       case '$telegramMention':
-        return `You were mentioned by ${sender}`;
-      case '$telegramNewContact':
-        return `New contact: ${contactName}`;
-      case '$telegramGroupInvite':
-        return `Group invite from ${safeActivityData.inviter || 'Unknown'}`;
+        return `${sender} mentioned you`;
+      case '$newContact':
+        return `New Telegram contact: ${contactName}`;
+      case '$groupInvite':
+        return `Telegram group invite from ${safeActivityData.inviter || 'Unknown'}`;
       default:
-        return 'New notification';
+        return 'New Telegram notification';
     }
   };
 
@@ -70,12 +74,12 @@ const TelegramMessageNotification = ({ notification, onNotificationClick }: any)
       case '$telegramMessage':
       case '$telegramMention':
         return message;
-      case '$telegramNewContact':
-        return `${contactName} has been added to your contacts`;
-      case '$telegramGroupInvite':
+      case '$newContact':
+        return `${contactName} has been added to your Telegram contacts`;
+      case '$groupInvite':
         return `You've been invited to join ${groupName}`;
       default:
-        return 'You have a new notification';
+        return 'You have a new Telegram notification';
     }
   };
 
@@ -105,19 +109,38 @@ const TelegramMessageNotification = ({ notification, onNotificationClick }: any)
 
   return (
     <div
-      className={`flex items-start space-x-3 p-3 rounded-lg transition-colors cursor-pointer hover:bg-primary/10 ${
-        readAt ? 'bg-card opacity-75' : 'bg-accent'
+      className={`flex items-start space-x-3 p-4 rounded-lg transition-all duration-200 cursor-pointer hover:bg-primary/5 border-l-4 ${
+        readAt 
+          ? 'bg-card/50 opacity-75 border-l-muted-foreground/30' 
+          : 'bg-accent/80 border-l-blue-500 hover:bg-accent'
       }`}
       onClick={() => onNotificationClick(notification)}
     >
+      {/* Enhanced Icon with Platform Color */}
       <div className="flex-shrink-0 mt-1">
-        {getIcon()}
+        <div className={`p-2 rounded-full ${readAt ? 'bg-muted' : 'bg-blue-50'}`}>
+          {getIcon()}
+        </div>
       </div>
+      
+      {/* Enhanced Content Layout */}
       <div className="flex-1 min-w-0">
-        <div className="flex items-center justify-between">
-          <p className="text-sm font-medium text-foreground truncate">
-            {getTitle()}
-          </p>
+        {/* Header with Sender and Status */}
+        <div className="flex items-center justify-between mb-1">
+          <div className="flex items-center space-x-2">
+            {/* Sender Name */}
+            <p className="text-sm font-semibold text-foreground truncate max-w-[180px]">
+              {getTitle()}
+            </p>
+            {/* Telegram Icon for Platform Identification */}
+            <div className="flex-shrink-0">
+              <div className="h-4 w-4 bg-blue-500 rounded-full flex items-center justify-center">
+                <span className="text-white text-xs font-bold">T</span>
+              </div>
+            </div>
+          </div>
+          
+          {/* Read Status */}
           <div className="flex items-center space-x-1">
             {readAt ? (
               <CheckCheck className="h-3 w-3 text-muted-foreground" />
@@ -126,12 +149,32 @@ const TelegramMessageNotification = ({ notification, onNotificationClick }: any)
             )}
           </div>
         </div>
-        <p className="text-sm text-muted-foreground mt-1 line-clamp-2">
-          {getMessage()}
-        </p>
-        <p className="text-xs text-muted-foreground mt-1">
-          {getTimestamp()}
-        </p>
+        
+        {/* Message Preview with Better Typography */}
+        <div className="mb-2">
+          <p className="text-sm text-muted-foreground line-clamp-2 leading-relaxed">
+            {getMessage()}
+          </p>
+        </div>
+        
+        {/* Footer with Timestamp and Additional Info */}
+        <div className="flex items-center justify-between">
+          <p className="text-xs text-muted-foreground">
+            {getTimestamp()}
+          </p>
+          
+          {/* Message Type Indicator */}
+          {kind === '$telegramMention' && (
+            <Badge variant="secondary" className="text-xs bg-blue-100 text-blue-700">
+              Mention
+            </Badge>
+          )}
+          {kind === '$groupInvite' && (
+            <Badge variant="secondary" className="text-xs bg-orange-100 text-orange-700">
+              Group Invite
+            </Badge>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -165,6 +208,38 @@ function TelegramNotificationsContent() {
     }
   }, [markInboxNotificationAsRead]);
 
+  // CRITICAL FIX: Add real-time contact update dispatch
+  React.useEffect(() => {
+    if (inboxNotifications && inboxNotifications.length > 0) {
+      // Process new unread notifications to dispatch contact updates
+      const newNotifications = inboxNotifications.filter(notification => !notification.readAt);
+      
+      newNotifications.forEach(notification => {
+        if (notification.kind === '$telegramMessage' && notification.activities?.[0]?.data) {
+          const activityData = notification.activities[0].data;
+          const { contact_id, message, timestamp } = activityData;
+          
+          if (contact_id && message) {
+            console.log('🔔 Dispatching real-time Telegram contact update event:', {
+              contactId: contact_id,
+              message: message,
+              timestamp: timestamp
+            });
+            
+            // Dispatch custom event for real-time contact updates
+            window.dispatchEvent(new CustomEvent('telegram-message-update', {
+              detail: {
+                contactId: contact_id,
+                message: message,
+                timestamp: timestamp || Date.now()
+              }
+            }));
+          }
+        }
+      });
+    }
+  }, [inboxNotifications]);
+
   // Filter out invalid notifications before rendering
   const validNotifications = (inboxNotifications || []).filter((notification) => {
     if (!notification || !notification.id) {
@@ -172,7 +247,7 @@ function TelegramNotificationsContent() {
       return false;
     }
     
-    // Only show Telegram messages for now until other types are properly implemented
+    // For now, only show Telegram messages until other types are properly implemented
     if (notification.kind !== '$telegramMessage') {
       console.log(`🚨 [FRONTEND] Filtering out non-message Telegram notification: ${notification.kind}`);
       return false;
@@ -201,7 +276,7 @@ function TelegramNotificationsContent() {
       if (displayName.includes('bridge bot') || 
           displayName.includes('telegram bridge') ||
           displayName.includes('whatsapp bridge')) {
-        console.log(`🚨 [FRONTEND] Filtering out bridge bot notification from: ${displayName}`);
+        console.log(`🚨 [FRONTEND] Filtering out Telegram bridge bot notification from: ${displayName}`);
         return false;
       }
     }
@@ -214,8 +289,8 @@ function TelegramNotificationsContent() {
   if (validNotifications.length === 0) {
     return (
       <div className="p-8 text-center">
-        <Send className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-        <p className="text-muted-foreground">No notifications yet</p>
+        <MessageSquare className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+        <p className="text-muted-foreground">No Telegram notifications yet</p>
         <p className="text-sm text-muted-foreground mt-1">
           You'll see Telegram messages here when they arrive
         </p>

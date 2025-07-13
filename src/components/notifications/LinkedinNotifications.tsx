@@ -5,14 +5,14 @@ import { Button } from "@/components/ui/button";
 import { MessageSquare, AtSign, UserPlus, Users, Check, CheckCheck } from "lucide-react";
 import { format } from "date-fns";
 
-// Custom notification renderer for WhatsApp messages
-const WhatsAppMessageNotification = ({ notification, onNotificationClick }: any) => {
+// Custom notification renderer for LinkedIn messages
+const LinkedInMessageNotification = ({ notification, onNotificationClick }: any) => {
   // The core of the fix: activityData is nested inside the 'activities' array
   const activityData = notification?.activities?.[0]?.data;
   const { kind, readAt } = notification;
 
   // 🔥 DEBUG: Log the exact notification structure being processed
-  console.log('🐛 [FRONTEND DEBUG] Processing notification:', {
+  console.log('🐛 [FRONTEND DEBUG] Processing LinkedIn notification:', {
     id: notification?.id,
     kind,
     activityData: activityData,
@@ -20,7 +20,7 @@ const WhatsAppMessageNotification = ({ notification, onNotificationClick }: any)
 
   // Defensive programming for the extracted data
   if (!activityData) {
-    console.warn("🚨 [FRONTEND] Notification has no activity data, skipping render.", notification);
+    console.warn("🚨 [FRONTEND] LinkedIn notification has no activity data, skipping render.", notification);
     return null;
   }
 
@@ -29,10 +29,10 @@ const WhatsAppMessageNotification = ({ notification, onNotificationClick }: any)
   
   const getIcon = () => {
     switch (kind) {
-      case '$whatsappMessage':
-        return <MessageSquare className="h-5 w-5 text-green-600" />;
-      case '$whatsappMention':
-        return <AtSign className="h-5 w-5 text-blue-600" />;
+      case '$linkedinMessage':
+        return <MessageSquare className="h-5 w-5 text-blue-600" />;
+      case '$linkedinMention':
+        return <AtSign className="h-5 w-5 text-blue-700" />;
       case '$newContact':
         return <UserPlus className="h-5 w-5 text-purple-600" />;
       case '$groupInvite':
@@ -52,16 +52,16 @@ const WhatsAppMessageNotification = ({ notification, onNotificationClick }: any)
     const contactName = safeActivityData.contactName || 'Unknown contact';
     
     switch (kind) {
-      case '$whatsappMessage':
+      case '$linkedinMessage':
         return sender;
-      case '$whatsappMention':
+      case '$linkedinMention':
         return `${sender} mentioned you`;
       case '$newContact':
-        return `New contact: ${contactName}`;
+        return `New LinkedIn contact: ${contactName}`;
       case '$groupInvite':
-        return `Group invite from ${safeActivityData.inviter || 'Unknown'}`;
+        return `LinkedIn group invite from ${safeActivityData.inviter || 'Unknown'}`;
       default:
-        return 'New notification';
+        return 'New LinkedIn notification';
     }
   };
 
@@ -71,15 +71,15 @@ const WhatsAppMessageNotification = ({ notification, onNotificationClick }: any)
     const groupName = safeActivityData.room || 'Unknown group';
     
     switch (kind) {
-      case '$whatsappMessage':
-      case '$whatsappMention':
+      case '$linkedinMessage':
+      case '$linkedinMention':
         return message;
       case '$newContact':
-        return `${contactName} has been added to your contacts`;
+        return `${contactName} has been added to your LinkedIn contacts`;
       case '$groupInvite':
         return `You've been invited to join ${groupName}`;
       default:
-        return 'You have a new notification';
+        return 'You have a new LinkedIn notification';
     }
   };
 
@@ -99,8 +99,8 @@ const WhatsAppMessageNotification = ({ notification, onNotificationClick }: any)
     return 'Just now';
   };
 
-  // 🎯 SUCCESS: This is a valid WhatsApp message notification
-  console.log('✅ [FRONTEND] Rendering valid WhatsApp notification:', {
+  // 🎯 SUCCESS: This is a valid LinkedIn message notification
+  console.log('✅ [FRONTEND] Rendering valid LinkedIn notification:', {
     kind,
     sender: safeActivityData.sender,
     contact_display_name: safeActivityData.contact_display_name,
@@ -112,13 +112,13 @@ const WhatsAppMessageNotification = ({ notification, onNotificationClick }: any)
       className={`flex items-start space-x-3 p-4 rounded-lg transition-all duration-200 cursor-pointer hover:bg-primary/5 border-l-4 ${
         readAt 
           ? 'bg-card/50 opacity-75 border-l-muted-foreground/30' 
-          : 'bg-accent/80 border-l-green-500 hover:bg-accent'
+          : 'bg-accent/80 border-l-blue-600 hover:bg-accent'
       }`}
       onClick={() => onNotificationClick(notification)}
     >
       {/* Enhanced Icon with Platform Color */}
       <div className="flex-shrink-0 mt-1">
-        <div className={`p-2 rounded-full ${readAt ? 'bg-muted' : 'bg-green-50'}`}>
+        <div className={`p-2 rounded-full ${readAt ? 'bg-muted' : 'bg-blue-50'}`}>
           {getIcon()}
         </div>
       </div>
@@ -132,10 +132,10 @@ const WhatsAppMessageNotification = ({ notification, onNotificationClick }: any)
             <p className="text-sm font-semibold text-foreground truncate max-w-[180px]">
               {getTitle()}
             </p>
-            {/* WhatsApp Icon for Platform Identification */}
+            {/* LinkedIn Icon for Platform Identification */}
             <div className="flex-shrink-0">
-              <div className="h-4 w-4 bg-green-500 rounded-full flex items-center justify-center">
-                <span className="text-white text-xs font-bold">W</span>
+              <div className="h-4 w-4 bg-blue-600 text-white text-xs font-bold rounded flex items-center justify-center">
+                in
               </div>
             </div>
           </div>
@@ -145,7 +145,7 @@ const WhatsAppMessageNotification = ({ notification, onNotificationClick }: any)
             {readAt ? (
               <CheckCheck className="h-3 w-3 text-muted-foreground" />
             ) : (
-              <Check className="h-3 w-3 text-green-500" />
+              <Check className="h-3 w-3 text-blue-600" />
             )}
           </div>
         </div>
@@ -164,7 +164,7 @@ const WhatsAppMessageNotification = ({ notification, onNotificationClick }: any)
           </p>
           
           {/* Message Type Indicator */}
-          {kind === '$whatsappMention' && (
+          {kind === '$linkedinMention' && (
             <Badge variant="secondary" className="text-xs bg-blue-100 text-blue-700">
               Mention
             </Badge>
@@ -181,7 +181,7 @@ const WhatsAppMessageNotification = ({ notification, onNotificationClick }: any)
 };
 
 // Notifications Content Component (needs Suspense)
-function WhatsAppNotificationsContent() {
+function LinkedInNotificationsContent() {
   const { inboxNotifications } = useInboxNotifications();
   const markInboxNotificationAsRead = useMarkInboxNotificationAsRead();
 
@@ -194,7 +194,7 @@ function WhatsAppNotificationsContent() {
       // Dispatch a custom event to be handled by MainLayout
       window.dispatchEvent(new CustomEvent('navigate-to-chat', {
         detail: {
-          platform: 'whatsapp',
+          platform: 'linkedin',
           contactId: notification.subjectId,
         }
       }));
@@ -202,9 +202,9 @@ function WhatsAppNotificationsContent() {
       // Also, dispatch an event to close the popover
       window.dispatchEvent(new CustomEvent('close-notification-popover'));
       
-      console.log(`[Notifications] Dispatched navigate-to-chat for contact: ${notification.subjectId}`);
+      console.log(`[Notifications] Dispatched navigate-to-chat for LinkedIn contact: ${notification.subjectId}`);
     } else {
-      console.warn('[Notifications] Clicked notification is missing a subjectId', notification);
+      console.warn('[Notifications] Clicked LinkedIn notification is missing a subjectId', notification);
     }
   }, [markInboxNotificationAsRead]);
 
@@ -215,19 +215,19 @@ function WhatsAppNotificationsContent() {
       const newNotifications = inboxNotifications.filter(notification => !notification.readAt);
       
       newNotifications.forEach(notification => {
-        if (notification.kind === '$whatsappMessage' && notification.activities?.[0]?.data) {
+        if (notification.kind === '$linkedinMessage' && notification.activities?.[0]?.data) {
           const activityData = notification.activities[0].data;
           const { contact_id, message, timestamp } = activityData;
           
           if (contact_id && message) {
-            console.log('🔔 Dispatching real-time contact update event:', {
+            console.log('🔔 Dispatching real-time LinkedIn contact update event:', {
               contactId: contact_id,
               message: message,
               timestamp: timestamp
             });
             
             // Dispatch custom event for real-time contact updates
-            window.dispatchEvent(new CustomEvent('whatsapp-message-update', {
+            window.dispatchEvent(new CustomEvent('linkedin-message-update', {
               detail: {
                 contactId: contact_id,
                 message: message,
@@ -243,27 +243,27 @@ function WhatsAppNotificationsContent() {
   // Filter out invalid notifications before rendering
   const validNotifications = (inboxNotifications || []).filter((notification) => {
     if (!notification || !notification.id) {
-      console.warn("🚨 [FRONTEND] Skipping notification without ID:", notification);
+      console.warn("🚨 [FRONTEND] Skipping LinkedIn notification without ID:", notification);
       return false;
     }
     
-    // For now, only show WhatsApp messages until other types are properly implemented
-    if (notification.kind !== '$whatsappMessage') {
-      console.log(`🚨 [FRONTEND] Filtering out non-message notification: ${notification.kind}`);
+    // For now, only show LinkedIn messages until other types are properly implemented
+    if (notification.kind !== '$linkedinMessage') {
+      console.log(`🚨 [FRONTEND] Filtering out non-message LinkedIn notification: ${notification.kind}`);
       return false;
     }
     
     // The core of the fix: activityData is nested inside the 'activities' array
     const activityData = notification?.activities?.[0]?.data;
 
-    // Ensure WhatsApp messages have required data
-    if (notification.kind === '$whatsappMessage') {
+    // Ensure LinkedIn messages have required data
+    if (notification.kind === '$linkedinMessage') {
       // Use the new `contact_display_name` field for validation
       const hasValidData = activityData && 
                           (activityData.contact_display_name || activityData.sender) && 
                           activityData.message;
       if (!hasValidData) {
-        console.warn("🚨 [FRONTEND] Filtering out WhatsApp message with missing data:", { 
+        console.warn("🚨 [FRONTEND] Filtering out LinkedIn message with missing data:", { 
           id: notification.id, 
           kind: notification.kind,
           activityData: activityData 
@@ -274,9 +274,10 @@ function WhatsAppNotificationsContent() {
       // Filter out bridge bot notifications
       const displayName = String(activityData.contact_display_name || activityData.sender || '').toLowerCase();
       if (displayName.includes('bridge bot') || 
-          displayName.includes('whatsapp bridge') ||
-          displayName.includes('telegram bridge')) {
-        console.log(`🚨 [FRONTEND] Filtering out bridge bot notification from: ${displayName}`);
+          displayName.includes('linkedin bridge') ||
+          displayName.includes('telegram bridge') ||
+          displayName.includes('whatsapp bridge')) {
+        console.log(`🚨 [FRONTEND] Filtering out LinkedIn bridge bot notification from: ${displayName}`);
         return false;
       }
     }
@@ -284,15 +285,15 @@ function WhatsAppNotificationsContent() {
     return true;
   });
   
-  console.log(`🎯 [FRONTEND] Showing ${validNotifications.length} valid notifications out of ${inboxNotifications.length} total`);
+  console.log(`🎯 [FRONTEND] Showing ${validNotifications.length} valid LinkedIn notifications out of ${inboxNotifications.length} total`);
   
   if (validNotifications.length === 0) {
     return (
       <div className="p-8 text-center">
         <MessageSquare className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-        <p className="text-muted-foreground">No notifications yet</p>
+        <p className="text-muted-foreground">No LinkedIn notifications yet</p>
         <p className="text-sm text-muted-foreground mt-1">
-          You'll see WhatsApp messages here when they arrive
+          You'll see LinkedIn messages here when they arrive
         </p>
         {inboxNotifications.length > 0 && (
           <p className="text-xs text-orange-600 mt-2">
@@ -306,7 +307,7 @@ function WhatsAppNotificationsContent() {
   return (
     <div className="space-y-1 p-2">
       {validNotifications.map((notification) => (
-        <WhatsAppMessageNotification
+        <LinkedInMessageNotification
           key={notification.id}
           notification={notification}
           onNotificationClick={handleNotificationClick}
@@ -316,8 +317,8 @@ function WhatsAppNotificationsContent() {
   );
 }
 
-// Main WhatsApp Notifications Component (with Suspense wrapper)
-export function WhatsAppNotifications() {
+// Main LinkedIn Notifications Component (with Suspense wrapper)
+export function LinkedInNotifications() {
   return (
     <Suspense 
       fallback={
@@ -334,7 +335,7 @@ export function WhatsAppNotifications() {
         </div>
       }
     >
-      <WhatsAppNotificationsContent />
+      <LinkedInNotificationsContent />
     </Suspense>
   );
 } 

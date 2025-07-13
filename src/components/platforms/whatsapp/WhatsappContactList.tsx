@@ -4,7 +4,7 @@ import { useSelector, useDispatch } from 'react-redux';
 import type { RootState, AppDispatch } from '@/store/store';
 import PropTypes from 'prop-types';
 import { toast } from 'react-hot-toast';
-import { fetchContacts, selectContactPriority, updateContactMembership, freshSyncContacts, hideContact, updateContactDisplayName } from '@/store/slices/contactSlice';
+import { fetchContacts, selectContactPriority, updateContactMembership, freshSyncContacts, hideContact, updateContactDisplayName, updateContactLastMessage } from '@/store/slices/contactSlice';
 import logger from '@/utils/logger';
 import { SYNC_STATES } from '@/utils/syncUtils';
 import { getSocket, initializeSocket } from '@/utils/socket';
@@ -222,7 +222,7 @@ const ContactItem = memo(({ contact, onClick, isSelected, notificationCount }: C
         throw new Error(response.data?.message || 'Failed to delete contact');
       }
     } catch (error) {
-      logger.error('[WhatsApp] Error deleting contact:', {
+      logger.error('[WhatsAppContactList] Error deleting contact:', {
         contactId: contact.id,
         error: error.message
       });
@@ -328,11 +328,15 @@ const ContactItem = memo(({ contact, onClick, isSelected, notificationCount }: C
                   {priority && <PriorityBadge priority={priority} />}
                 </div>
                 <div className="text-muted-foreground text-sm truncate">
-                  {contact.last_message ? (
+                  {contact.last_message && contact.last_message.trim() ? (
                     <span className="line-clamp-1">
                       {contact.last_message.length > 50 
                         ? `${contact.last_message.substring(0, 50)}...` 
                         : contact.last_message}
+                    </span>
+                  ) : notificationCount && notificationCount > 0 ? (
+                    <span className="italic text-blue-500">
+                      {notificationCount === 1 ? '1 new message' : `${notificationCount} new messages`}
                     </span>
                   ) : (
                     <span className="italic opacity-70">No messages yet</span>
@@ -342,16 +346,31 @@ const ContactItem = memo(({ contact, onClick, isSelected, notificationCount }: C
             )}
           </div>
           <div className="flex flex-col items-end space-y-1">
-            {contact.last_message_at && (
+            {(contact.last_message_at || notificationCount > 0) && (
               <div className="text-muted-foreground text-xs flex-shrink-0">
                   {(() => {
                     try {
-                      const date = new Date(contact.last_message_at);
-                      if (isNaN(date.getTime())) return 'Unknown';
-                      return format(date, 'HH:mm');
+                      // 🚀 CRITICAL FIX: Show current time for notifications if no last_message_at
+                      const timeToShow = contact.last_message_at || Date.now();
+                      const date = new Date(timeToShow);
+                      if (isNaN(date.getTime())) return 'Now';
+                      
+                      // 🚀 CRITICAL FIX: Better time formatting
+                      const now = new Date();
+                      const diffMs = now.getTime() - date.getTime();
+                      const diffMinutes = Math.floor(diffMs / (1000 * 60));
+                      const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+                      const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+                      
+                      // Show relative time for very recent messages
+                      if (diffMinutes < 1) return 'Now';
+                      if (diffMinutes < 60) return `${diffMinutes}m`;
+                      if (diffHours < 24) return format(date, 'HH:mm');
+                      if (diffDays < 7) return format(date, 'E HH:mm');
+                      return format(date, 'MMM d');
                     } catch (error) {
                       console.warn('[WhatsAppContactList] Invalid date format:', contact.last_message_at, error);
-                      return 'Unknown';
+                      return notificationCount > 0 ? 'Now' : 'Unknown';
                     }
                   })()}
               </div>
@@ -509,6 +528,7 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }: WhatsAppCon
   });
   const [showPriorityFilter, setShowPriorityFilter] = useState(false);
   const [sortBy, setSortBy] = useState('activity'); // 'activity', 'priority', 'name'
+  const [forceRefreshKey, setForceRefreshKey] = useState(0); // CRITICAL FIX: Force refresh key for real-time updates
 
   const unreadNotificationCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -520,8 +540,77 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }: WhatsAppCon
       }
     }
     return counts;
-  }, [inboxNotifications]);
+  }, [inboxNotifications, forceRefreshKey]); // CRITICAL FIX: Add forceRefreshKey to dependencies
 
+  // CRITICAL FIX: Track processed messages to prevent duplicates
+  const processedMessageIds = useRef(new Set<string>());
+  
+  // CRITICAL FIX: Clear old processed message IDs periodically
+  useEffect(() => {
+    const cleanup = setInterval(() => {
+      if (processedMessageIds.current.size > 1000) {
+        processedMessageIds.current.clear();
+        logger.info('[WhatsAppContactList] Cleared processed message IDs cache');
+      }
+    }, 60000); // Clean every minute
+    
+    return () => clearInterval(cleanup);
+  }, []);
+
+  // CRITICAL FIX: Force contact list re-sorting by updating array reference - MOVED BEFORE useEffect hooks
+  const forceContactResort = useCallback(() => {
+    // 🚀 CRITICAL FIX: Instead of sorting a local copy, we need to trigger the useMemo re-computation
+    // The useMemo depends on contacts, so we need to ensure the contacts array gets a new reference
+    // We'll do this by updating the forceRefreshKey which is in the useMemo dependencies
+    
+    logger.info('[WhatsAppContactList] 🔄 FORCING CONTACT RESORT - Triggering re-sort via forceRefreshKey');
+    
+    // Force re-render triggers - this will cause the useMemo to re-run
+    setLastManualRefreshTime(Date.now());
+    setForceRefreshKey(prev => prev + 1);
+    
+    // Also log current contact order for debugging
+    setTimeout(() => {
+      const sortedContacts = [...contacts].sort((a, b) => {
+        if (!a || !b || !a.id || !b.id) return 0;
+        
+        try {
+          // Get notification counts
+          const aNotifications = unreadNotificationCounts[a.id] || 0;
+          const bNotifications = unreadNotificationCounts[b.id] || 0;
+          
+          // 🚀 CRITICAL FIX: Latest message timestamp should be PRIMARY sort criteria
+          const aTime = a.last_message_at ? new Date(a.last_message_at).getTime() : 0;
+          const bTime = b.last_message_at ? new Date(b.last_message_at).getTime() : 0;
+          
+          // STEP 1: Latest message ALWAYS wins first (regardless of notifications)
+          if (aTime !== bTime) {
+            return bTime - aTime; // Most recent first
+          }
+          
+          // STEP 2: If same timestamp, then notifications get priority
+          if (aNotifications !== bNotifications) {
+            return bNotifications - aNotifications;
+          }
+          
+          return 0;
+        } catch (error) {
+          return 0;
+        }
+      });
+      
+      logger.info('[WhatsAppContactList] 🔄 EXPECTED NEW ORDER after resort:', 
+        sortedContacts.slice(0, 3).map(c => ({ 
+          id: c.id, 
+          name: c.display_name, 
+          last_message: c.last_message?.substring(0, 20),
+          last_message_at: c.last_message_at 
+        }))
+      );
+    }, 150); // Small delay to see the result
+  }, [contacts, unreadNotificationCounts, setLastManualRefreshTime, setForceRefreshKey]);
+
+  // CRITICAL FIX: Optimize loadContactsWithRetry to prevent infinite loops
   const loadContactsWithRetry = useCallback(async (retryCount = 0) => {
     try {
       if (!session?.user?.id) {
@@ -529,16 +618,24 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }: WhatsAppCon
         return;
       }
       
-      // Log active platform for debugging
+      // CRITICAL FIX: Prevent duplicate fetches by checking if already loading
+      if (loading && retryCount === 0) {
+        logger.info('[WhatsAppContactList] Already loading contacts, skipping duplicate fetch');
+        return;
+      }
+      
+      // Log active platform for debugging (reduced logging)
       const activePlatform = localStorage.getItem('dailyfix_active_platform');
-      logger.info(`[WhatsAppContactList] Active platform in localStorage: ${activePlatform}`);
+      if (activePlatform !== 'whatsapp') {
+        logger.info('[WhatsAppContactList] Not active platform, skipping fetch');
+        return;
+      }
       
       logger.info('[WhatsAppContactList] Fetching contacts...');
       const result = await dispatch(fetchContacts({
         userId: session.user.id,
         platform: 'whatsapp'
       })).unwrap();
-      logger.info('[Contacts fetch log from component] result: ', result);
 
       if (result?.inProgress) {
         logger.info('[WhatsAppContactList] Sync in progress, showing sync state');
@@ -548,13 +645,6 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }: WhatsAppCon
         });
         return;
       }
-
-      // if (result?.contacts?.length === 0 && !syncProgress) {
-      //   logger.info('[WhatsAppContactList] No contacts found, initiating sync');
-      //   if (session?.user?.id) {
-      //     await dispatch(syncContact(session.user.id)).unwrap();
-      //   }
-      // }
     } catch (err) {
       logger.error('[WhatsAppContactList] Error fetching contacts:', err);
       if (retryCount < MAX_RETRIES) {
@@ -563,11 +653,9 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }: WhatsAppCon
         setTimeout(() => {
           loadContactsWithRetry(retryCount + 1);
         }, delay);
-      } else {
-        // toast.error('Failed to load contacts after multiple attempts');
       }
     }
-  }, [dispatch, syncProgress, session, navigate]);
+  }, [dispatch, session?.user?.id, loading]); // CRITICAL FIX: Removed syncProgress from dependencies
 
   const handleRefresh = async () => {
     // Check if we're in cooldown period
@@ -671,6 +759,7 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }: WhatsAppCon
         // Reset cooldown after a short delay
         setTimeout(() => {
           setRefreshCooldown(false);
+          setSyncProgress(null); // ✅ Clear sync progress after completion
         }, 2000);
 
         // Clear the sync timeout
@@ -755,6 +844,11 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }: WhatsAppCon
             message: 'Sync completed (timeout)',
             progress: 100
           });
+          
+          // Clear sync progress after timeout
+          setTimeout(() => {
+            setSyncProgress(null);
+          }, 2000);
 
           // Fetch the updated contacts
           if (session?.user?.id) {
@@ -906,12 +1000,8 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }: WhatsAppCon
     try {
       logger.info('[WhatsAppContactList] Handling contact selection:', {
         contactId: contact.id,
-        membership: contact?.membership,
-        contact: contact
+        membership: contact?.membership
       });
-      
-      // Add mobile debugging
-      console.log('[DEBUG Mobile] Contact selected in WhatsApp list:', contact);
       
       // Remove tooltips immediately to prevent UI interference
       const tooltips = document.querySelectorAll('.tooltip');
@@ -932,14 +1022,12 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }: WhatsAppCon
               dispatch(updateContactMembership({ contactId: contact.id, updatedContact }));
               
               // Ensure selection is called with the updated contact
-              console.log('[DEBUG Mobile] Passing updated contact to parent:', updatedContact);
               onContactSelect(updatedContact);
             } else if (response.data?.joinedBefore) {
               logger.info('[WhatsAppContactList] Contact was already joined:', contact.id);
               
               // Make sure the contact has updated membership
               const updatedContact = { ...contact, membership: 'join' };
-              console.log('[DEBUG Mobile] Contact already joined, selecting with updated membership:', updatedContact);
               onContactSelect(updatedContact);
             } else {
               logger.warn('[WhatsAppContactList] Invite acceptance failed:', {
@@ -963,12 +1051,10 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }: WhatsAppCon
           toast.error('You are banned from this chat');
           return;
         case 'join':
-          console.log('[DEBUG Mobile] Contact has join membership, selecting directly');
           onContactSelect({ ...contact });
           break;
         case undefined:
           logger.warn('[WhatsAppContactList] Contact has no membership state:', contact);
-          console.log('[DEBUG Mobile] Contact has no membership, selecting anyway');
           onContactSelect({ ...contact });
           break;
         default:
@@ -987,44 +1073,46 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }: WhatsAppCon
     dispatch(updateContactMembership({ contactId: updatedContact.id, updatedContact }));
   }, [dispatch]);
 
-  // useEffect(() => {
-  //   const socket = getSocket();
-  //   const handleNewContact = (data) => {
-  //     logger.info('[WhatsAppContactList] New contact received:', {
-  //       contactId: data.id,
-  //       displayName: data.display_name
-  //     });
-  //     dispatch(addContact(data));
-  //     toast.success(`New contact: ${data.display_name}`);
-  //   };
-  //   if (socket) {
-  //     socket.on('whatsapp:new_contact', handleNewContact);
-  //     return () => socket.off('whatsapp:new_contact', handleNewContact);
-  //   }
-  // }, [dispatch]);
-
+  // CRITICAL FIX: Simplified initial contact loading - only load once on mount
   useEffect(() => {
     if (!session) {
       logger.warn('[WhatsAppContactList] No session found, redirecting to login');
       navigate('/login');
       return;
     }
-    loadContactsWithRetry();
-  }, [session, navigate, loadContactsWithRetry]);
+    
+    // Only load contacts if we don't already have them and we're not already loading
+    if (contacts.length === 0 && !loading) {
+      loadContactsWithRetry();
+    }
+  }, [session, navigate]); // CRITICAL FIX: Removed loadContactsWithRetry from dependencies
 
+  // CRITICAL FIX: Simplified platform change handling - removed redundant checks
+  useEffect(() => {
+    const handlePlatformSwitch = () => {
+      const activePlatform = localStorage.getItem('dailyfix_active_platform');
+      if (activePlatform === 'whatsapp') {
+        logger.info('[WhatsAppContactList] Platform switched to WhatsApp, requiring refresh');
+        setRefreshRequired(true);
+      }
+    };
+    
+    window.addEventListener('platform-switched', handlePlatformSwitch);
+    
+    return () => {
+      window.removeEventListener('platform-switched', handlePlatformSwitch);
+    };
+  }, []); // CRITICAL FIX: Empty dependency array to prevent re-registration
+
+  // CRITICAL FIX: Optimized socket initialization to prevent infinite loops
   useEffect(() => {
     const initSocket = async () => {
       try {
         // Add explicit check for valid session before initializing socket
         if (!session?.access_token || !session?.user?.id) {
           logger.warn('[WhatsAppContactList] Cannot initialize socket - no valid session');
-          return; // Exit early if no valid session
+          return;
         }
-
-        logger.info('[WhatsAppContactList] Initializing socket with session:', {
-          hasToken: !!session?.access_token,
-          userId: session?.user?.id
-        });
 
         // Now attempt socket initialization with the validated session
         const socket = await initializeSocket({ platform: 'whatsapp' });
@@ -1047,7 +1135,11 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }: WhatsAppCon
         const handleSyncComplete = (data) => {
           if (data.userId === session.user.id) {
             setSyncProgress(null);
-            loadContactsWithRetry();
+            // Only reload if we're the active platform
+            const activePlatform = localStorage.getItem('dailyfix_active_platform');
+            if (activePlatform === 'whatsapp') {
+              loadContactsWithRetry();
+            }
           }
         };
 
@@ -1065,8 +1157,7 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }: WhatsAppCon
           if (data.userId === session.user.id) {
             logger.info('[WhatsAppContactList] Contact removed by backend via socket:', {
               contactId: data.contactId,
-              reason: data.reason,
-              message: data.message
+              reason: data.reason
             });
             
             // Remove from Redux state
@@ -1077,7 +1168,7 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }: WhatsAppCon
               onContactSelect(null);
             }
             
-            // Show informative toast with WhatsApp styling
+            // Show informative toast
             toast.success(data.message || 'Contact has been automatically removed', {
               duration: 6000,
               style: {
@@ -1091,16 +1182,121 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }: WhatsAppCon
           }
         };
 
+        // Add listeners for real-time updates
         socket.on('whatsapp:sync_progress', handleSyncProgress);
         socket.on('whatsapp:sync_complete', handleSyncComplete);
         socket.on('whatsapp:sync_error', handleSyncError);
         socket.on('whatsapp:contact:removed', handleContactRemoved);
+
+        // 🚨 CRITICAL FIX: JOIN USER ROOM TO RECEIVE BACKEND EVENTS
+        const userRoom = `user:${session.user.id}`;
+        socket.emit('join:room', userRoom);
+        logger.info(`[WhatsAppContactList] 🎯 JOINING USER ROOM: ${userRoom}`);
+        
+        // 🚨 CRITICAL FIX: Authenticate with user ID for targeted events
+        socket.emit('authenticate', { userId: session.user.id });
+        logger.info(`[WhatsAppContactList] 🎯 AUTHENTICATING USER: ${session.user.id}`);
+
+        // 🚨 CRITICAL FIX: Add confirmation handlers
+        socket.on('room:joined', (data) => {
+          logger.info(`[WhatsAppContactList] ✅ ROOM JOINED CONFIRMED: ${data.roomId}`);
+        });
+        
+        socket.on('authenticated', (data) => {
+          logger.info(`[WhatsAppContactList] ✅ AUTHENTICATION CONFIRMED:`, data);
+        });
+        
+        socket.on('room:error', (data) => {
+          logger.error(`[WhatsAppContactList] ❌ ROOM JOIN ERROR:`, data);
+        });
+
+        // CRITICAL FIX: Add missing real-time message listeners
+        socket.on('whatsapp:contact_auto_created', (data: any) => {
+          logger.info('🎯 Auto-created contact received via WebSocket:', {
+            contactId: data.contact?.id,
+            displayName: data.contact?.display_name,
+            platform: data.platform,
+            source: data.source
+          });
+          
+          // Refresh contact list to include the new auto-created contact
+          if (session?.user?.id) {
+            dispatch(fetchContacts({
+              userId: session.user.id,
+              platform: 'whatsapp'
+            }));
+          }
+          
+          // Show success notification
+          toast.success(`New contact "${data.contact?.display_name}" auto-created successfully`);
+        });
+
+        // CRITICAL FIX: Listen for real-time message updates
+        socket.on('whatsapp:message_received', (data: any) => {
+          // 🚀 CRITICAL FIX: Create unique message ID to prevent duplicates
+          const messageId = `${data.contactId}-${data.timestamp}-${data.message?.substring(0, 10)}`;
+          
+          if (processedMessageIds.current.has(messageId)) {
+            logger.debug('[WhatsAppContactList] Skipping duplicate message:', { messageId, contactId: data.contactId });
+            return;
+          }
+          
+          processedMessageIds.current.add(messageId);
+          
+          logger.info('📨 Message received via WebSocket:', {
+            contactId: data.contactId,
+            message: data.message,
+            timestamp: data.timestamp,
+            messageId
+          });
+          
+          // Update contact's last message in real-time
+          if (data.contactId && data.message) {
+            dispatch(updateContactLastMessage({
+              contactId: data.contactId,
+              lastMessage: data.message,
+              lastMessageAt: data.timestamp
+            }));
+            
+            // 🚀 CRITICAL FIX: Force immediate re-render and re-sort
+            setTimeout(() => {
+              forceContactResort();
+            }, 100); // Small delay to ensure Redux state updates first
+          }
+        });
+
+        // CRITICAL FIX: Also listen for traditional whatsapp:message events
+        socket.on('whatsapp:message', (data: any) => {
+          logger.info('📨 Traditional message received via WebSocket:', {
+            contactId: data.contactId,
+            messageContent: data.message?.content,
+            messageId: data.message?.message_id
+          });
+          
+          // Update contact's last message from traditional system
+          if (data.contactId && data.message) {
+            const messageText = data.message.content || data.message.body || '';
+            const messageTime = data.message.timestamp || data.message.sent_at || Date.now();
+            
+            dispatch(updateContactLastMessage({
+              contactId: data.contactId,
+              lastMessage: messageText,
+              lastMessageAt: messageTime
+            }));
+          }
+        });
 
         return () => {
           socket.off('whatsapp:sync_progress', handleSyncProgress);
           socket.off('whatsapp:sync_complete', handleSyncComplete);
           socket.off('whatsapp:sync_error', handleSyncError);
           socket.off('whatsapp:contact:removed', handleContactRemoved);
+          socket.off('whatsapp:contact_auto_created');
+          socket.off('whatsapp:message_received');
+          socket.off('whatsapp:message'); // Clean up traditional listener
+          socket.off('room:joined');
+          socket.off('authenticated');
+          socket.off('room:error');
         };
       } catch (error) {
         logger.error('[WhatsAppContactList] Socket initialization error:', error);
@@ -1110,19 +1306,144 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }: WhatsAppCon
     // Only attempt to initialize the socket if we have a session
     if (session?.access_token) {
       initSocket();
-    } else {
-      logger.warn('[WhatsAppContactList] Skipping socket initialization - no session available');
     }
-  }, [session, loadContactsWithRetry]);
+  }, [session?.access_token, session?.user?.id, dispatch, forceContactResort]); // CRITICAL FIX: Optimized dependencies
 
+  // CRITICAL FIX: Enhanced real-time contact updates from Liveblocks notifications
   useEffect(() => {
-    const isInitialSync = !hasShownAcknowledgment && contacts.length === 1 &&
-      contacts[0]?.display_name?.toLowerCase().includes('whatsapp bridge bot');
-    if (isInitialSync) {
-      setShowAcknowledgment(true);
-      setHasShownAcknowledgment(true);
+    if (inboxNotifications && inboxNotifications.length > 0) {
+      // Process new unread notifications to update contact last messages
+      const newNotifications = inboxNotifications.filter(notification => !notification.readAt);
+      
+      newNotifications.forEach(notification => {
+        if (notification.kind === '$whatsappMessage' && notification.activities?.[0]?.data) {
+          const activityData = notification.activities[0].data;
+          const { contact_id, message, timestamp } = activityData;
+          
+          if (contact_id && message) {
+            // 🚀 CRITICAL FIX: Create unique message ID to prevent duplicates
+            const messageText = String(message); // Convert to string first
+            const messageId = `liveblocks-${contact_id}-${timestamp}-${messageText?.substring(0, 10)}`;
+            
+            if (processedMessageIds.current.has(messageId)) {
+              logger.debug('[WhatsAppContactList] Skipping duplicate Liveblocks message:', { messageId, contact_id });
+              return;
+            }
+            
+            processedMessageIds.current.add(messageId);
+            
+            logger.info('🔔 Processing Liveblocks notification for real-time contact update:', {
+              contactId: contact_id,
+              message: messageText,
+              timestamp: timestamp,
+              messageId
+            });
+            
+            // Update contact's last message from Liveblocks notification
+            dispatch(updateContactLastMessage({
+              contactId: parseInt(String(contact_id)),
+              lastMessage: messageText,
+              lastMessageAt: timestamp || Date.now()
+            }));
+            
+            // 🚀 CRITICAL FIX: Force contact resort after Redux update
+            setTimeout(() => {
+              forceContactResort();
+            }, 100);
+          }
+        }
+      });
     }
-  }, [hasShownAcknowledgment, contacts]);
+  }, [inboxNotifications, dispatch, forceContactResort]);
+
+  // 🚀 CRITICAL FIX: Listen for user's own SENT messages to update contact list
+  useEffect(() => {
+    const handleSentMessage = (event: CustomEvent) => {
+      const { contactId, message, timestamp } = event.detail;
+      
+      if (contactId && message) {
+        // 🚀 CRITICAL FIX: Create unique message ID to prevent duplicates
+        const messageId = `sent-${contactId}-${timestamp}-${message?.substring(0, 10)}`;
+        
+        if (processedMessageIds.current.has(messageId)) {
+          logger.debug('[WhatsAppContactList] Skipping duplicate sent message:', { messageId, contactId });
+          return;
+        }
+        
+        processedMessageIds.current.add(messageId);
+        
+        logger.info('🎯 User sent message - updating contact list:', {
+          contactId,
+          message,
+          timestamp,
+          messageId
+        });
+        
+        // Update contact's last message with sent message
+        dispatch(updateContactLastMessage({
+          contactId: parseInt(contactId),
+          lastMessage: message,
+          lastMessageAt: timestamp || Date.now()
+        }));
+        
+        // 🚀 CRITICAL FIX: Force contact resort after Redux update
+        setTimeout(() => {
+          forceContactResort();
+        }, 100);
+      }
+    };
+
+    // Listen for sent message events from ChatView
+    window.addEventListener('whatsapp-message-sent', handleSentMessage as EventListener);
+    
+    return () => {
+      window.removeEventListener('whatsapp-message-sent', handleSentMessage as EventListener);
+    };
+  }, [dispatch, forceContactResort]);
+
+  // CRITICAL FIX: Listen for custom events from notification system
+  useEffect(() => {
+    const handleMessageUpdate = (event: CustomEvent) => {
+      const { contactId, message, timestamp } = event.detail;
+      
+      if (contactId && message) {
+        // 🚀 CRITICAL FIX: Create unique message ID to prevent duplicates
+        const messageId = `custom-${contactId}-${timestamp}-${message?.substring(0, 10)}`;
+        
+        if (processedMessageIds.current.has(messageId)) {
+          logger.debug('[WhatsAppContactList] Skipping duplicate custom message:', { messageId, contactId });
+          return;
+        }
+        
+        processedMessageIds.current.add(messageId);
+        
+        logger.info('🎯 Received message update event:', {
+          contactId,
+          message,
+          timestamp,
+          messageId
+        });
+        
+        // Update contact's last message
+        dispatch(updateContactLastMessage({
+          contactId: parseInt(contactId),
+          lastMessage: message,
+          lastMessageAt: timestamp || Date.now()
+        }));
+        
+        // 🚀 CRITICAL FIX: Force contact resort after Redux update
+        setTimeout(() => {
+          forceContactResort();
+        }, 100);
+      }
+    };
+
+    window.addEventListener('whatsapp-message-update', handleMessageUpdate as EventListener);
+    
+    return () => {
+      window.removeEventListener('whatsapp-message-update', handleMessageUpdate as EventListener);
+    };
+  }, [dispatch, forceContactResort]);
 
   // Initialize avatar cache hook
   const { prefetchAvatars, clearExpiredAvatars } = useAvatarCache();
@@ -1132,7 +1453,11 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }: WhatsAppCon
     if (contacts && contacts.length > 0) {
       // Get contacts with avatar URLs
       const contactsWithAvatars = contacts.filter(c => c.avatar_url);
-      console.log(`Found ${contactsWithAvatars.length} contacts with avatars out of ${contacts.length} total`);
+      
+      // Only log in development mode to reduce console spam
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`Found ${contactsWithAvatars.length} contacts with avatars out of ${contacts.length} total`);
+      }
 
       // Prefetch avatars in the background
       prefetchAvatars(contactsWithAvatars);
@@ -1189,16 +1514,11 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }: WhatsAppCon
   const processedContacts = useMemo(() => {
     let filtered = filteredContacts;
 
-    // DEBUG: Log priority information
-    console.log('[DEBUG] Priority filtering - priorityMap:', priorityMap);
-    console.log('[DEBUG] Priority filtering - priorityFilter:', priorityFilter);
-    console.log('[DEBUG] Sample contacts with priorities:', 
-      filteredContacts.slice(0, 3).map(contact => ({
-        id: contact.id,
-        name: contact.display_name,
-        priority: selectContactPriority({ contacts: { items: contacts, priorityMap: priorityMap } }, contact.id)
-      }))
-    );
+    // CRITICAL FIX: Reduced debug logging to prevent console spam
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[DEBUG] Priority filtering - priorityMap size:', Object.keys(priorityMap || {}).length);
+      console.log('[DEBUG] Priority filtering - priorityFilter:', priorityFilter);
+    }
 
     // Apply priority filtering
     if (!priorityFilter.high || !priorityFilter.medium || !priorityFilter.low || !priorityFilter.none) {
@@ -1209,13 +1529,6 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }: WhatsAppCon
         try {
           const priority = selectContactPriority({ contacts: { items: contacts, priorityMap: priorityMap } }, contact.id);
           
-          console.log('[DEBUG] Contact priority check:', {
-            contactId: contact.id,
-            contactName: contact.display_name,
-            priority: priority,
-            priorityFilter: priorityFilter
-          });
-          
           if (!priority && priorityFilter.none) return true;
           if (priority === 'high' && priorityFilter.high) return true;
           if (priority === 'medium' && priorityFilter.medium) return true;
@@ -1223,7 +1536,6 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }: WhatsAppCon
           
           return false;
         } catch (error) {
-          logger.warn('[WhatsAppContactList] Error getting priority for contact:', { contactId: contact.id, error });
           // If priority check fails, include in 'none' filter
           return priorityFilter.none;
         }
@@ -1240,7 +1552,7 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }: WhatsAppCon
       });
     }
 
-    // Apply sorting
+    // 🚀 CRITICAL FIX: Proper sorting like real WhatsApp - LATEST MESSAGE FIRST ALWAYS
     return filtered.sort((a, b) => {
       // CRITICAL FIX: Add safety checks for contact existence
       if (!a || !b || !a.id || !b.id) return 0;
@@ -1250,123 +1562,62 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }: WhatsAppCon
         const aNotifications = unreadNotificationCounts[a.id] || 0;
         const bNotifications = unreadNotificationCounts[b.id] || 0;
         
-        // Get priorities for both contacts with safety checks
+        // 🔥 STEP 1: LATEST MESSAGE TIME is the PRIMARY sort criteria (like real WhatsApp)
+        const aTime = a.last_message_at ? new Date(a.last_message_at).getTime() : 0;
+        const bTime = b.last_message_at ? new Date(b.last_message_at).getTime() : 0;
+        
+        // CRITICAL: Latest message ALWAYS wins first (sent OR received)
+        if (aTime !== bTime) {
+          return bTime - aTime; // Most recent activity first
+        }
+        
+        // 🔥 STEP 2: If same timestamp, then unread notifications get priority
+        if (aNotifications !== bNotifications) {
+          return bNotifications - aNotifications;
+        }
+        
+        // 🔥 STEP 3: If same notifications and time, use priority as tiebreaker
         let aPriority, bPriority;
         try {
           aPriority = selectContactPriority({ contacts: { items: contacts, priorityMap: priorityMap } }, a.id);
         } catch (error) {
-          logger.warn('[WhatsAppContactList] Error getting priority for contact A:', { contactId: a.id, error });
           aPriority = 'low';
         }
         
         try {
           bPriority = selectContactPriority({ contacts: { items: contacts, priorityMap: priorityMap } }, b.id);
         } catch (error) {
-          logger.warn('[WhatsAppContactList] Error getting priority for contact B:', { contactId: b.id, error });
           bPriority = 'low';
         }
         
-        // Priority order mapping
         const priorityOrder = { 'high': 3, 'medium': 2, 'low': 1 };
         const aPriorityScore = priorityOrder[aPriority] || 0;
         const bPriorityScore = priorityOrder[bPriority] || 0;
-
-        switch (sortBy) {
-          case 'priority':
-            // Sort by priority first, then by notifications, then by activity
-            if (aPriorityScore !== bPriorityScore) {
-              return bPriorityScore - aPriorityScore; // Higher priority first
-            }
-            if (aNotifications !== bNotifications) {
-              return bNotifications - aNotifications; // More notifications first
-            }
-            // Fall through to activity sorting
-            break;
-            
-          case 'name':
-            // Sort alphabetically, but prioritize contacts with notifications
-            if (aNotifications !== bNotifications) {
-              return bNotifications - aNotifications; // Notifications first
-            }
-            return (a.display_name || '').localeCompare(b.display_name || '');
-            
-          case 'activity':
-          default:
-            // Sort by notifications first, then by last message time, then by priority
-            if (aNotifications !== bNotifications) {
-              return bNotifications - aNotifications; // More notifications first
-            }
-            
-            const aTime = new Date(a.last_message_at || 0).getTime();
-            const bTime = new Date(b.last_message_at || 0).getTime();
-            
-            if (aTime !== bTime) {
-              return bTime - aTime; // More recent activity first
-            }
-            
-            // If same activity time, sort by priority
-            return bPriorityScore - aPriorityScore;
+        
+        if (aPriorityScore !== bPriorityScore) {
+          return bPriorityScore - aPriorityScore;
         }
-
-        // Default fallback to activity time
-        const aTime = new Date(a.last_message_at || 0).getTime();
-        const bTime = new Date(b.last_message_at || 0).getTime();
-        return bTime - aTime;
+        
+        // 🔥 STEP 4: Final fallback - alphabetical
+        return (a.display_name || '').localeCompare(b.display_name || '');
       } catch (error) {
-        logger.error('[WhatsAppContactList] Error in contact sorting:', { 
-          contactA: a.id, 
-          contactB: b.id, 
-          error 
-        });
-        return 0; // Keep original order if sorting fails
+        logger.warn('[WhatsAppContactList] Error sorting contacts:', error);
+        return 0;
       }
     });
-  }, [filteredContacts, searchQuery, priorityFilter, sortBy, unreadNotificationCounts, contacts, priorityMap]);
+  }, [filteredContacts, searchQuery, priorityFilter, sortBy, unreadNotificationCounts, contacts, priorityMap, forceRefreshKey, lastManualRefreshTime]); // CRITICAL FIX: Add contact data changes to dependencies
 
   const searchedContacts = processedContacts; // For backward compatibility
 
-  // Check if the current platform is active and refresh if needed
-  useEffect(() => {
-    const checkAndRefreshIfActive = () => {
-      const activePlatform = localStorage.getItem('dailyfix_active_platform');
-      if (activePlatform === 'whatsapp') {
-        logger.info('[WhatsAppContactList] WhatsApp is the active platform, refreshing contacts');
-        loadContactsWithRetry();
-      }
-    };
-    
-    checkAndRefreshIfActive();
-    
-    const handlePlatformChange = () => {
-      // When platform changes, require refresh
-      setRefreshRequired(true);
-      checkAndRefreshIfActive();
-    };
+  // CRITICAL FIX: Removed the problematic useEffect that was causing infinite loops
+  // The checkAndRefreshIfActive function was calling loadContactsWithRetry repeatedly
+  // This was the main cause of the page hanging and infinite contact fetching
 
-    const handlePlatformSwitch = () => {
-      // Only set refresh required when platform is actually switched
-      const activePlatform = localStorage.getItem('dailyfix_active_platform');
-      if (activePlatform === 'whatsapp') {
-        logger.info('[WhatsAppContactList] Platform switched to WhatsApp, requiring refresh');
-        setRefreshRequired(true);
-      }
-    };
-    
-    window.addEventListener('platform-connection-changed', handlePlatformChange);
-    window.addEventListener('refresh-platform-status', handlePlatformChange);
-    window.addEventListener('platform-switched', handlePlatformSwitch);
-    
-    return () => {
-      window.removeEventListener('platform-connection-changed', handlePlatformChange);
-      window.removeEventListener('refresh-platform-status', handlePlatformChange);
-      window.removeEventListener('platform-switched', handlePlatformSwitch);
-    };
-  }, [loadContactsWithRetry]);
-
-  // Listen for platform connection changes to refresh contacts
+  // Listen for platform connection changes to refresh contacts - OPTIMIZED
   useEffect(() => {
     const handlePlatformConnectionChange = () => {
-      if (session?.user?.id) {
+      const activePlatform = localStorage.getItem('dailyfix_active_platform');
+      if (activePlatform === 'whatsapp' && session?.user?.id) {
         logger.info('[WhatsappContactList] Platform connection changed, refreshing contacts');
         // Small delay to ensure connection status is updated
         setTimeout(() => {
@@ -1379,7 +1630,8 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }: WhatsAppCon
     };
 
     const handleForceRefresh = (event: CustomEvent) => {
-      if (session?.user?.id) {
+      const activePlatform = localStorage.getItem('dailyfix_active_platform');
+      if (activePlatform === 'whatsapp' && session?.user?.id) {
         logger.info('[WhatsappContactList] Force refresh requested from platform switcher');
         // Force refresh contacts immediately
         dispatch(freshSyncContacts({
@@ -1396,7 +1648,7 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }: WhatsAppCon
       window.removeEventListener('platform-connection-changed', handlePlatformConnectionChange);
       window.removeEventListener('force-refresh-contacts', handleForceRefresh as EventListener);
     };
-  }, [session?.user?.id, dispatch]);
+  }, [session?.user?.id, dispatch]); // CRITICAL FIX: Removed loadContactsWithRetry from dependencies
 
   // Listen for platform verification events
   useEffect(() => {
@@ -1548,81 +1800,24 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }: WhatsAppCon
         {/* Filter and Sort Controls */}
         <div className="flex items-center justify-between gap-2">
           {/* Sort Dropdown */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" className="text-xs">
-                Sort: {sortBy === 'activity' ? 'Recent' : sortBy === 'priority' ? 'Priority' : 'Name'}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent>
-              <DropdownMenuItem onSelect={() => setSortBy('activity')}>
-                Recent Activity
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setSortBy('priority')}>
-                Priority Level
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setSortBy('name')}>
-                Alphabetical
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <div className="relative">
+            <Button variant="outline" size="sm" className="text-xs">
+              Sort: {sortBy === 'activity' ? 'Recent' : sortBy === 'priority' ? 'Priority' : 'Name'}
+            </Button>
+          </div>
 
           {/* Priority Filter */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button 
-                variant={showPriorityFilter ? "default" : "outline"} 
-                size="sm" 
-                className="text-xs"
-              >
-                <FiFilter className="w-3 h-3 mr-1" />
-                Filter
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent>
-              <DropdownMenuCheckboxItem
-                checked={priorityFilter.high}
-                onCheckedChange={(checked) => 
-                  setPriorityFilter(prev => ({ ...prev, high: checked }))
-                }
-              >
-                <Badge variant="outline" className="bg-red-500/10 text-red-500 border-red-500/20 mr-2">
-                  High Priority
-                </Badge>
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={priorityFilter.medium}
-                onCheckedChange={(checked) => 
-                  setPriorityFilter(prev => ({ ...prev, medium: checked }))
-                }
-              >
-                <Badge variant="outline" className="bg-yellow-500/10 text-yellow-500 border-yellow-500/20 mr-2">
-                  Medium Priority
-                </Badge>
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={priorityFilter.low}
-                onCheckedChange={(checked) => 
-                  setPriorityFilter(prev => ({ ...prev, low: checked }))
-                }
-              >
-                <Badge variant="outline" className="bg-blue-500/10 text-blue-500 border-blue-500/20 mr-2">
-                  Low Priority
-                </Badge>
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuCheckboxItem
-                checked={priorityFilter.none}
-                onCheckedChange={(checked) => 
-                  setPriorityFilter(prev => ({ ...prev, none: checked }))
-                }
-              >
-                <Badge variant="outline" className="bg-muted text-muted-foreground border-border mr-2">
-                  No Priority
-                </Badge>
-              </DropdownMenuCheckboxItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <div className="relative">
+            <Button 
+              variant={showPriorityFilter ? "default" : "outline"} 
+              size="sm" 
+              className="text-xs"
+              onClick={() => setShowPriorityFilter(!showPriorityFilter)}
+            >
+              <FiFilter className="w-3 h-3 mr-1" />
+              Filter
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -1645,7 +1840,7 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }: WhatsAppCon
           <div className="flex flex-col items-center justify-center p-4 h-full min-h-[300px]">
             {searchQuery ? (
               <p className="text-muted-foreground">No contacts found matching "{searchQuery}"</p>
-            ) : syncProgress ? (
+            ) : syncProgress?.state === SYNC_STATES.SYNCING ? (
               <>
                 <img 
                   src={sync_experience} 
@@ -1653,20 +1848,25 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }: WhatsAppCon
                   className="w-32 h-32 mb-4"
                 />
                 <p className="text-muted-foreground">Syncing contacts...</p>
+                {syncProgress.progress && (
+                  <p className="text-sm text-muted-foreground mt-2">{syncProgress.progress}% complete</p>
+                )}
               </>
             ) : (
               <>
-              <img 
-                src={sync_experience} 
-                alt="Syncing contacts" 
-                className="w-[14rem] h-[11rem]"
-              />
-              <p className="text-muted-foreground">Syncing contacts...</p>
-            </>
+                <div className="p-4 rounded-full bg-muted mb-4">
+                  <FiMessageSquare className="w-8 h-8 text-muted-foreground" />
+                </div>
+                <p className="text-muted-foreground text-center">
+                  There is nothing here right now.<br />
+                  Check back any time soon.
+                </p>
+              </>
             )}
           </div>
         ) : (
           <Virtuoso
+            key={`contacts-${forceRefreshKey}-${lastManualRefreshTime}-${JSON.stringify(contacts.map(c => c.last_message_at)).slice(0, 50)}`}
             style={{ height: '100%' }}
             data={searchedContacts}
             itemContent={(index, contact) => {
@@ -1707,7 +1907,6 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }: WhatsAppCon
                 // 3. Touch duration was not too short (not accidental)
                 if (!isTouchMoved && touchDuration > 100 && touchDuration < 500) {
                   e.preventDefault();
-                  console.log('[DEBUG Mobile] Valid tap detected for:', contact.display_name);
                   handleContactSelect(contact);
                 }
               };
@@ -1723,7 +1922,6 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }: WhatsAppCon
                     // Only handle click on non-touch devices
                     if (e.detail === 0) return; // Ignore programmatic clicks
                     if ('ontouchstart' in window) return; // Ignore on touch devices
-                    console.log('[DEBUG Desktop] Mouse click detected for:', contact.display_name);
                     handleContactSelect(contact);
                   }}
                 >

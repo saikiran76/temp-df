@@ -265,6 +265,14 @@ const contactSlice = createSlice({
         contact.display_name = displayName;
       }
     },
+    updateContactLastMessage: (state, action) => {
+      const { contactId, lastMessage, lastMessageAt } = action.payload;
+      const contact = state.items.find(c => c.id === contactId);
+      if (contact) {
+        contact.last_message = lastMessage;
+        contact.last_message_at = lastMessageAt;
+      }
+    },
     // CRITICAL FIX: Add reset action for global cleanup
     reset: () => initialState
   },
@@ -285,22 +293,53 @@ const contactSlice = createSlice({
             state.items = [];
           }
         } else {
-          state.items = action.payload.contacts.map(contact => ({
+          // 🚀 CRITICAL FIX: Merge existing contact data with fetched data to preserve last_message
+          const fetchedContacts = action.payload.contacts.map(contact => ({
             ...contact,
             metadata: {
               ...contact.metadata,
               membership: contact.metadata?.membership || 'join'
             }
           }));
+          
+          // Create a map of existing contacts for quick lookup
+          const existingContactsMap = new Map();
+          state.items.forEach(contact => {
+            existingContactsMap.set(contact.id, contact);
+          });
+          
+          // Merge fetched contacts with existing data, preserving last_message if it's newer
+          const mergedContacts = fetchedContacts.map(fetchedContact => {
+            const existingContact = existingContactsMap.get(fetchedContact.id);
+            
+            if (existingContact) {
+              // Compare timestamps to keep the most recent last_message
+              const existingTime = existingContact.last_message_at ? new Date(existingContact.last_message_at).getTime() : 0;
+              const fetchedTime = fetchedContact.last_message_at ? new Date(fetchedContact.last_message_at).getTime() : 0;
+              
+              return {
+                ...fetchedContact, // Use fetched contact as base
+                // Preserve last_message if existing is newer or if fetched doesn't have one
+                last_message: existingTime > fetchedTime ? existingContact.last_message : fetchedContact.last_message,
+                last_message_at: existingTime > fetchedTime ? existingContact.last_message_at : fetchedContact.last_message_at,
+              };
+            }
+            
+            return fetchedContact;
+          });
+          
+          state.items = mergedContacts;
           state.syncStatus.inProgress = false;
           state.syncStatus.lastSyncTime = Date.now();
+          
+          logger.info('[Contacts] Contacts merged successfully (preserving last_message):', {
+            count: state.items.length,
+            hasMetadata: state.items.some(item => item.metadata?.membership),
+            preservedMessages: state.items.filter(item => item.last_message).length
+          });
         }
 
         state.initialLoadComplete = true;
-        logger.info('[Contacts] Contacts fetch successful:', {
-          count: state.items.length,
-          hasMetadata: state.items.some(item => item.metadata?.membership)
-        });
       })
       .addCase(fetchContacts.rejected, (state, action) => {
         state.loading = false;
@@ -394,6 +433,7 @@ export const {
   cleanupPriorities,
   hideContact,
   updateContactDisplayName,
+  updateContactLastMessage,
   reset
 } = contactSlice.actions;
 

@@ -4,7 +4,7 @@ import { useSelector, useDispatch } from 'react-redux';
 import type { RootState, AppDispatch } from '@/store/store';
 import PropTypes from 'prop-types';
 import { toast } from 'react-hot-toast';
-import { fetchContacts, selectContactPriority, updateContactMembership, freshSyncContacts, hideContact, updateContactDisplayName } from '@/store/slices/contactSlice';
+import { fetchContacts, selectContactPriority, updateContactMembership, freshSyncContacts, hideContact, updateContactDisplayName, updateContactLastMessage } from '@/store/slices/contactSlice';
 import logger from '@/utils/logger';
 import { SYNC_STATES } from '@/utils/syncUtils';
 import { getSocket, initializeSocket } from '@/utils/socket';
@@ -334,6 +334,10 @@ const ContactItem = memo(({ contact, onClick, isSelected, notificationCount }: C
                         ? `${contact.last_message.substring(0, 50)}...` 
                         : contact.last_message}
                     </span>
+                  ) : notificationCount && notificationCount > 0 ? (
+                    <span className="italic text-blue-500">
+                      {notificationCount === 1 ? '1 new message' : `${notificationCount} new messages`}
+                    </span>
                   ) : (
                     <span className="italic opacity-70">No messages yet</span>
                   )}
@@ -342,16 +346,31 @@ const ContactItem = memo(({ contact, onClick, isSelected, notificationCount }: C
             )}
           </div>
           <div className="flex flex-col items-end space-y-1">
-            {contact.last_message_at && (
+            {(contact.last_message_at || notificationCount > 0) && (
               <div className="text-muted-foreground text-xs flex-shrink-0">
                   {(() => {
                     try {
-                      const date = new Date(contact.last_message_at);
-                      if (isNaN(date.getTime())) return 'Unknown';
-                      return format(date, 'HH:mm');
+                      // 🚀 CRITICAL FIX: Show current time for notifications if no last_message_at
+                      const timeToShow = contact.last_message_at || Date.now();
+                      const date = new Date(timeToShow);
+                      if (isNaN(date.getTime())) return 'Now';
+                      
+                      // 🚀 CRITICAL FIX: Better time formatting
+                      const now = new Date();
+                      const diffMs = now.getTime() - date.getTime();
+                      const diffMinutes = Math.floor(diffMs / (1000 * 60));
+                      const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+                      const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+                      
+                      // Show relative time for very recent messages
+                      if (diffMinutes < 1) return 'Now';
+                      if (diffMinutes < 60) return `${diffMinutes}m`;
+                      if (diffHours < 24) return format(date, 'HH:mm');
+                      if (diffDays < 7) return format(date, 'E HH:mm');
+                      return format(date, 'MMM d');
                     } catch (error) {
                       console.warn('[linkedinContactList] Invalid date format:', contact.last_message_at, error);
-                      return 'Unknown';
+                      return notificationCount > 0 ? 'Now' : 'Unknown';
                     }
                   })()}
               </div>
@@ -509,6 +528,22 @@ const LinkedinContactList = ({ onContactSelect, selectedContactId }: LinkedinCon
   });
   const [showPriorityFilter, setShowPriorityFilter] = useState(false);
   const [sortBy, setSortBy] = useState('activity'); // 'activity', 'priority', 'name'
+  const [forceRefreshKey, setForceRefreshKey] = useState(0); // CRITICAL FIX: Force refresh key for real-time updates
+
+  // CRITICAL FIX: Track processed messages to prevent duplicates - MOVED BEFORE useEffect hooks
+  const processedMessageIds = useRef(new Set<string>());
+  
+  // CRITICAL FIX: Clear old processed message IDs periodically
+  useEffect(() => {
+    const cleanup = setInterval(() => {
+      if (processedMessageIds.current.size > 1000) {
+        processedMessageIds.current.clear();
+        logger.info('[LinkedinContactList] Cleared processed message IDs cache');
+      }
+    }, 60000); // Clean every minute
+    
+    return () => clearInterval(cleanup);
+  }, []);
 
   const unreadNotificationCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -520,7 +555,43 @@ const LinkedinContactList = ({ onContactSelect, selectedContactId }: LinkedinCon
       }
     }
     return counts;
-  }, [inboxNotifications]);
+  }, [inboxNotifications, forceRefreshKey]); // CRITICAL FIX: Add forceRefreshKey to dependencies
+
+  // CRITICAL FIX: Force contact list re-sorting by updating array reference - MOVED BEFORE useEffect hooks
+  const forceContactResort = useCallback(() => {
+    // Create a new array reference to trigger React re-render
+    const updatedContacts = [...contacts];
+    
+    // Sort the contacts immediately
+    updatedContacts.sort((a, b) => {
+      if (!a || !b || !a.id || !b.id) return 0;
+      
+      try {
+        // Get notification counts
+        const aNotifications = unreadNotificationCounts[a.id] || 0;
+        const bNotifications = unreadNotificationCounts[b.id] || 0;
+        
+        // Priority: notifications first, then latest message time
+        if (aNotifications > 0 && bNotifications === 0) return -1;
+        if (bNotifications > 0 && aNotifications === 0) return 1;
+        
+        const aTime = a.last_message_at ? new Date(a.last_message_at).getTime() : 0;
+        const bTime = b.last_message_at ? new Date(b.last_message_at).getTime() : 0;
+        
+        return bTime - aTime; // Most recent first
+      } catch (error) {
+        return 0;
+      }
+    });
+    
+    logger.info('[LinkedinContactList] 🔄 FORCED CONTACT RESORT - New order:', 
+      updatedContacts.slice(0, 3).map(c => ({ id: c.id, name: c.display_name, last_message_at: c.last_message_at }))
+    );
+    
+    // Force re-render triggers
+    setLastManualRefreshTime(Date.now());
+    setForceRefreshKey(prev => prev + 1);
+  }, [contacts, unreadNotificationCounts]);
 
   const loadContactsWithRetry = useCallback(async (retryCount = 0) => {
     try {
@@ -529,16 +600,24 @@ const LinkedinContactList = ({ onContactSelect, selectedContactId }: LinkedinCon
         return;
       }
       
-      // Log active platform for debugging
+      // CRITICAL FIX: Prevent duplicate fetches by checking if already loading
+      if (loading && retryCount === 0) {
+        logger.info('[LinkedinContactList] Already loading contacts, skipping duplicate fetch');
+        return;
+      }
+      
+      // Log active platform for debugging (reduced logging)
       const activePlatform = localStorage.getItem('dailyfix_active_platform');
-      logger.info(`[LinkedinContactList] Active platform in localStorage: ${activePlatform}`);
+      if (activePlatform !== 'linkedin') {
+        logger.info('[LinkedinContactList] Not active platform, skipping fetch');
+        return;
+      }
       
       logger.info('[LinkedinContactList] Fetching contacts...');
       const result = await dispatch(fetchContacts({
         userId: session.user.id,
         platform: 'linkedin'
       })).unwrap();
-      logger.info('[Contacts fetch log from component] result: ', result);
 
       if (result?.inProgress) {
         logger.info('[LinkedinContactList] Sync in progress, showing sync state');
@@ -567,7 +646,7 @@ const LinkedinContactList = ({ onContactSelect, selectedContactId }: LinkedinCon
         // toast.error('Failed to load contacts after multiple attempts');
       }
     }
-  }, [dispatch, syncProgress, session, navigate]);
+  }, [dispatch, syncProgress, session, navigate, loading]);
 
   const handleRefresh = async () => {
     // Check if we're in cooldown period
@@ -1012,6 +1091,109 @@ const LinkedinContactList = ({ onContactSelect, selectedContactId }: LinkedinCon
     loadContactsWithRetry();
   }, [session, navigate, loadContactsWithRetry]);
 
+  // CRITICAL FIX: Enhanced real-time contact updates from Liveblocks notifications
+  useEffect(() => {
+    if (inboxNotifications && inboxNotifications.length > 0) {
+      // Process new unread notifications to update contact last messages
+      const newNotifications = inboxNotifications.filter(notification => !notification.readAt);
+      
+      newNotifications.forEach(notification => {
+        if (notification.kind === '$linkedinMessage' && notification.activities?.[0]?.data) {
+          const activityData = notification.activities[0].data;
+          const { contact_id, message, timestamp } = activityData;
+          
+          if (contact_id && message) {
+            logger.info('🔔 Processing Liveblocks notification for real-time contact update:', {
+              contactId: contact_id,
+              message: message,
+              timestamp: timestamp
+            });
+            
+            // Update contact's last message from Liveblocks notification
+            dispatch(updateContactLastMessage({
+              contactId: parseInt(String(contact_id)),
+              lastMessage: message,
+              lastMessageAt: timestamp || Date.now()
+            }));
+            
+            // Force re-render by updating a timestamp
+            setLastManualRefreshTime(Date.now());
+            
+            // CRITICAL FIX: Trigger force refresh for real-time updates
+            setForceRefreshKey(prev => prev + 1);
+          }
+        }
+      });
+    }
+  }, [inboxNotifications, dispatch]);
+
+  // 🚀 CRITICAL FIX: Listen for user's own SENT messages to update contact list
+  useEffect(() => {
+    const handleSentMessage = (event: CustomEvent) => {
+      const { contactId, message, timestamp } = event.detail;
+      
+      if (contactId && message) {
+        logger.info('🎯 User sent LinkedIn message - updating contact list:', {
+          contactId,
+          message,
+          timestamp
+        });
+        
+        // Update contact's last message with sent message
+        dispatch(updateContactLastMessage({
+          contactId: parseInt(contactId),
+          lastMessage: message,
+          lastMessageAt: timestamp || Date.now()
+        }));
+        
+        // Force re-render to move contact to top
+        setLastManualRefreshTime(Date.now());
+        setForceRefreshKey(prev => prev + 1);
+      }
+    };
+
+    // Listen for sent message events from ChatView
+    window.addEventListener('linkedin-message-sent', handleSentMessage as EventListener);
+    
+    return () => {
+      window.removeEventListener('linkedin-message-sent', handleSentMessage as EventListener);
+    };
+  }, [dispatch]);
+
+  // CRITICAL FIX: Listen for custom events from notification system
+  useEffect(() => {
+    const handleMessageUpdate = (event: CustomEvent) => {
+      const { contactId, message, timestamp } = event.detail;
+      
+      if (contactId && message) {
+        logger.info('🎯 Received message update event:', {
+          contactId,
+          message,
+          timestamp
+        });
+        
+        // Update contact's last message
+        dispatch(updateContactLastMessage({
+          contactId: parseInt(contactId),
+          lastMessage: message,
+          lastMessageAt: timestamp || Date.now()
+        }));
+        
+        // Force re-render
+        setLastManualRefreshTime(Date.now());
+        
+        // CRITICAL FIX: Trigger force refresh for real-time updates
+        setForceRefreshKey(prev => prev + 1);
+      }
+    };
+
+    window.addEventListener('linkedin-message-update', handleMessageUpdate as EventListener);
+    
+    return () => {
+      window.removeEventListener('linkedin-message-update', handleMessageUpdate as EventListener);
+    };
+  }, [dispatch]);
+
   useEffect(() => {
     const initSocket = async () => {
       try {
@@ -1096,11 +1278,106 @@ const LinkedinContactList = ({ onContactSelect, selectedContactId }: LinkedinCon
         socket.on('linkedin:sync_error', handleSyncError);
         socket.on('linkedin:contact:removed', handleContactRemoved);
 
+        // 🚨 CRITICAL FIX: JOIN USER ROOM TO RECEIVE BACKEND EVENTS
+        const userRoom = `user:${session.user.id}`;
+        socket.emit('join:room', userRoom);
+        logger.info(`[LinkedinContactList] 🎯 JOINING USER ROOM: ${userRoom}`);
+        
+        // 🚨 CRITICAL FIX: Authenticate with user ID for targeted events
+        socket.emit('authenticate', { userId: session.user.id });
+        logger.info(`[LinkedinContactList] 🎯 AUTHENTICATING USER: ${session.user.id}`);
+
+        // 🚨 CRITICAL FIX: Add confirmation handlers
+        socket.on('room:joined', (data) => {
+          logger.info(`[LinkedinContactList] ✅ ROOM JOINED CONFIRMED: ${data.roomId}`);
+        });
+        
+        socket.on('authenticated', (data) => {
+          logger.info(`[LinkedinContactList] ✅ AUTHENTICATION CONFIRMED:`, data);
+        });
+        
+        socket.on('room:error', (data) => {
+          logger.error(`[LinkedinContactList] ❌ ROOM JOIN ERROR:`, data);
+        });
+
+        // Add listeners for real-time updates (if any are added for LinkedIn in the future)
+        // Note: LinkedIn may not have sync events like WhatsApp/Telegram
+        
+        // 🚀 NEW: Listen for auto-created contacts from enhanced event listener
+        socket.on('linkedin:contact_auto_created', (data: any) => {
+          logger.info('🎯 Auto-created LinkedIn contact received via WebSocket:', {
+            contactId: data.contact?.id,
+            displayName: data.contact?.display_name,
+            platform: data.platform,
+            source: data.source
+          });
+          
+          // Refresh contact list to include the new auto-created contact
+          if (session?.user?.id) {
+            dispatch(fetchContacts({
+              userId: session.user.id,
+              platform: 'linkedin'
+            }));
+          }
+          
+          // Show success notification
+          toast.success(`New LinkedIn contact "${data.contact?.display_name}" auto-created successfully`);
+        });
+
+        // 🚀 NEW: Listen for real-time message updates (enhanced system)
+        socket.on('linkedin:message_received', (data: any) => {
+          logger.info('📨 LinkedIn message received via WebSocket:', {
+            contactId: data.contactId,
+            message: data.message,
+            timestamp: data.timestamp
+          });
+          
+          // Update contact's last message in real-time
+          if (data.contactId && data.message) {
+            dispatch(updateContactLastMessage({
+              contactId: data.contactId,
+              lastMessage: data.message,
+              lastMessageAt: data.timestamp
+            }));
+            
+            // 🚀 CRITICAL FIX: Force immediate re-render and re-sort
+            setLastManualRefreshTime(Date.now());
+            setForceRefreshKey(prev => prev + 1);
+          }
+        });
+
+        // 🔥 CRITICAL FIX: Also listen for traditional linkedin:message events
+        socket.on('linkedin:message', (data: any) => {
+          logger.info('📨 Traditional LinkedIn message received via WebSocket:', {
+            contactId: data.contactId,
+            messageContent: data.message?.content,
+            messageId: data.message?.message_id
+          });
+          
+          // Update contact's last message from traditional system
+          if (data.contactId && data.message) {
+            const messageText = data.message.content || data.message.body || '';
+            const messageTime = data.message.timestamp || data.message.sent_at || Date.now();
+            
+            dispatch(updateContactLastMessage({
+              contactId: data.contactId,
+              lastMessage: messageText,
+              lastMessageAt: messageTime
+            }));
+          }
+        });
+
         return () => {
           socket.off('linkedin:sync_progress', handleSyncProgress);
           socket.off('linkedin:sync_complete', handleSyncComplete);
           socket.off('linkedin:sync_error', handleSyncError);
           socket.off('linkedin:contact:removed', handleContactRemoved);
+          socket.off('linkedin:contact_auto_created');
+          socket.off('linkedin:message_received');
+          socket.off('linkedin:message'); // Clean up traditional listener
+          socket.off('room:joined');
+          socket.off('authenticated');
+          socket.off('room:error');
         };
       } catch (error) {
         logger.error('[linkedinContactList] Socket initialization error:', error);
@@ -1240,7 +1517,7 @@ const LinkedinContactList = ({ onContactSelect, selectedContactId }: LinkedinCon
       });
     }
 
-    // Apply sorting
+    // 🚀 CRITICAL FIX: Proper sorting like real LinkedIn - LATEST MESSAGE FIRST ALWAYS
     return filtered.sort((a, b) => {
       // CRITICAL FIX: Add safety checks for contact existence
       if (!a || !b || !a.id || !b.id) return 0;
@@ -1250,7 +1527,25 @@ const LinkedinContactList = ({ onContactSelect, selectedContactId }: LinkedinCon
         const aNotifications = unreadNotificationCounts[a.id] || 0;
         const bNotifications = unreadNotificationCounts[b.id] || 0;
         
-        // Get priorities for both contacts with safety checks
+        // 🔥 STEP 1: Unread notifications get ABSOLUTE PRIORITY (like real LinkedIn)
+        if (aNotifications > 0 && bNotifications === 0) return -1;
+        if (bNotifications > 0 && aNotifications === 0) return 1;
+        
+        // 🔥 STEP 2: Both have notifications OR both don't - sort by LATEST MESSAGE TIME
+        const aTime = a.last_message_at ? new Date(a.last_message_at).getTime() : 0;
+        const bTime = b.last_message_at ? new Date(b.last_message_at).getTime() : 0;
+        
+        // CRITICAL: Latest message ALWAYS wins (sent OR received)
+        if (aTime !== bTime) {
+          return bTime - aTime; // Most recent activity first
+        }
+        
+        // 🔥 STEP 3: Same timestamp - use notification count as tiebreaker
+        if (aNotifications !== bNotifications) {
+          return bNotifications - aNotifications;
+        }
+        
+        // 🔥 STEP 4: Same notifications and time - use priority as tiebreaker
         let aPriority, bPriority;
         try {
           aPriority = selectContactPriority({ contacts: { items: contacts, priorityMap: priorityMap } }, a.id);
@@ -1266,52 +1561,16 @@ const LinkedinContactList = ({ onContactSelect, selectedContactId }: LinkedinCon
           bPriority = 'low';
         }
         
-        // Priority order mapping
         const priorityOrder = { 'high': 3, 'medium': 2, 'low': 1 };
         const aPriorityScore = priorityOrder[aPriority] || 0;
         const bPriorityScore = priorityOrder[bPriority] || 0;
 
-        switch (sortBy) {
-          case 'priority':
-            // Sort by priority first, then by notifications, then by activity
-            if (aPriorityScore !== bPriorityScore) {
-              return bPriorityScore - aPriorityScore; // Higher priority first
-            }
-            if (aNotifications !== bNotifications) {
-              return bNotifications - aNotifications; // More notifications first
-            }
-            // Fall through to activity sorting
-            break;
-            
-          case 'name':
-            // Sort alphabetically, but prioritize contacts with notifications
-            if (aNotifications !== bNotifications) {
-              return bNotifications - aNotifications; // Notifications first
-            }
-            return (a.display_name || '').localeCompare(b.display_name || '');
-            
-          case 'activity':
-          default:
-            // Sort by notifications first, then by last message time, then by priority
-            if (aNotifications !== bNotifications) {
-              return bNotifications - aNotifications; // More notifications first
-            }
-            
-            const aTime = new Date(a.last_message_at || 0).getTime();
-            const bTime = new Date(b.last_message_at || 0).getTime();
-            
-            if (aTime !== bTime) {
-              return bTime - aTime; // More recent activity first
-            }
-            
-            // If same activity time, sort by priority
-            return bPriorityScore - aPriorityScore;
+        if (aPriorityScore !== bPriorityScore) {
+          return bPriorityScore - aPriorityScore;
         }
-
-        // Default fallback to activity time
-        const aTime = new Date(a.last_message_at || 0).getTime();
-        const bTime = new Date(b.last_message_at || 0).getTime();
-        return bTime - aTime;
+        
+        // 🔥 STEP 5: Final fallback - alphabetical
+        return (a.display_name || '').localeCompare(b.display_name || '');
       } catch (error) {
         logger.error('[linkedinContactList] Error in contact sorting:', { 
           contactA: a.id, 
@@ -1321,7 +1580,7 @@ const LinkedinContactList = ({ onContactSelect, selectedContactId }: LinkedinCon
         return 0; // Keep original order if sorting fails
       }
     });
-  }, [filteredContacts, searchQuery, priorityFilter, sortBy, unreadNotificationCounts, contacts, priorityMap]);
+  }, [filteredContacts, searchQuery, priorityFilter, sortBy, unreadNotificationCounts, contacts, priorityMap, forceRefreshKey, lastManualRefreshTime]); // CRITICAL FIX: Add contact data changes to dependencies
 
   const searchedContacts = processedContacts; // For backward compatibility
 
@@ -1667,6 +1926,7 @@ const LinkedinContactList = ({ onContactSelect, selectedContactId }: LinkedinCon
           </div>
         ) : (
           <Virtuoso
+            key={`contacts-${forceRefreshKey}-${lastManualRefreshTime}-${JSON.stringify(contacts.map(c => c.last_message_at)).slice(0, 50)}`}
             style={{ height: '100%' }}
             data={searchedContacts}
             itemContent={(index, contact) => {

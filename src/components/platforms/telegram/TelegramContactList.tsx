@@ -4,7 +4,7 @@ import { useSelector, useDispatch } from 'react-redux';
 import type { RootState, AppDispatch } from '@/store/store';
 import PropTypes from 'prop-types';
 import { toast } from 'react-hot-toast';
-import { fetchContacts, selectContactPriority, updateContactMembership, freshSyncContacts, hideContact, updateContactDisplayName } from '@/store/slices/contactSlice';
+import { fetchContacts, selectContactPriority, updateContactMembership, freshSyncContacts, hideContact, updateContactDisplayName, updateContactLastMessage } from '@/store/slices/contactSlice';
 import logger from '@/utils/logger';
 import { SYNC_STATES } from '@/utils/syncUtils';
 import { getSocket, initializeSocket } from '@/utils/socket';
@@ -169,8 +169,8 @@ const ContactItem = memo(({ contact, onClick, isSelected, notificationCount }: C
 
   return (
     <div
-      className={`p-4 rounded-lg mb-2 bg-gray-800/50 hover:bg-gray-700/50 cursor-pointer transition-colors border border-gray-700/50 hover:border-gray-600 relative ${
-        isSelected ? 'bg-gray-700/50' : ''
+      className={`p-4 rounded-lg mb-2 bg-white hover:bg-gray-50 cursor-pointer transition-colors border border-gray-200 hover:border-gray-300 relative ${
+        isSelected ? 'bg-gray-100' : ''
       }`}
       onClick={onClick}
       onMouseEnter={() => setShowTooltip(true)}
@@ -182,7 +182,7 @@ const ContactItem = memo(({ contact, onClick, isSelected, notificationCount }: C
             onClick={handleEdit}
             variant="ghost"
             size="icon"
-            className="h-8 w-8 p-0 text-gray-400 hover:text-white"
+            className="h-8 w-8 p-0 text-gray-400 hover:text-black"
           >
             <FiEdit3 size={20} />
           </Button>
@@ -190,7 +190,7 @@ const ContactItem = memo(({ contact, onClick, isSelected, notificationCount }: C
             onClick={handleDelete}
             variant="ghost"
             size="icon"
-            className="h-8 w-8 p-0 text-gray-400 hover:text-white"
+            className="h-8 w-8 p-0 text-gray-400 hover:text-black"
           >
             <BiSolidHide size={20} />
           </Button>
@@ -206,22 +206,26 @@ const ContactItem = memo(({ contact, onClick, isSelected, notificationCount }: C
               value={editedName}
               onChange={(e) => setEditedName(e.target.value)}
               onKeyDown={handleNameSubmit}
-              className="bg-gray-700 text-white px-2 py-1 rounded w-full border border-gray-600"
+              className="bg-white text-black px-2 py-1 rounded w-full border border-gray-300"
               onClick={(e) => e.stopPropagation()}
               autoFocus
             />
           ) : (
             <>
               <div className="flex items-center gap-2">
-                <div className="text-white font-medium truncate">{contact.display_name}</div>
+                <div className="text-black font-medium truncate">{contact.display_name}</div>
                 {priority && <PriorityBadge priority={priority} />}
               </div>
-              <div className="text-gray-400 text-sm truncate">
-                {contact.last_message ? (
+              <div className="text-gray-500 text-sm truncate">
+                {contact.last_message && contact.last_message.trim() ? (
                   <span className="line-clamp-1">
                     {contact.last_message.length > 50 
                       ? `${contact.last_message.substring(0, 50)}...` 
                       : contact.last_message}
+                  </span>
+                ) : notificationCount && notificationCount > 0 ? (
+                  <span className="italic text-[#075e54]">
+                    {notificationCount === 1 ? '1 new message' : `${notificationCount} new messages`}
                   </span>
                 ) : (
                   <span className="italic opacity-70">No messages yet</span>
@@ -231,22 +235,37 @@ const ContactItem = memo(({ contact, onClick, isSelected, notificationCount }: C
           )}
         </div>
         <div className="flex flex-col items-end space-y-1">
-          {contact.last_message_at && (
+          {(contact.last_message_at || notificationCount > 0) && (
             <div className="text-gray-400 text-xs flex-shrink-0">
                 {(() => {
                   try {
-                    const date = new Date(contact.last_message_at);
-                    if (isNaN(date.getTime())) return 'Unknown';
-                    return format(date, 'HH:mm');
+                    // 🚀 CRITICAL FIX: Show current time for notifications if no last_message_at
+                    const timeToShow = contact.last_message_at || Date.now();
+                    const date = new Date(timeToShow);
+                    if (isNaN(date.getTime())) return 'Now';
+                    
+                    // 🚀 CRITICAL FIX: Better time formatting
+                    const now = new Date();
+                    const diffMs = now.getTime() - date.getTime();
+                    const diffMinutes = Math.floor(diffMs / (1000 * 60));
+                    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+                    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+                    
+                    // Show relative time for very recent messages
+                    if (diffMinutes < 1) return 'Now';
+                    if (diffMinutes < 60) return `${diffMinutes}m`;
+                    if (diffHours < 24) return format(date, 'HH:mm');
+                    if (diffDays < 7) return format(date, 'E HH:mm');
+                    return format(date, 'MMM d');
                   } catch (error) {
                     console.warn('[TelegramContactList] Invalid date format:', contact.last_message_at, error);
-                    return 'Unknown';
+                    return notificationCount > 0 ? 'Now' : 'Unknown';
                   }
                 })()}
             </div>
           )}
           {notificationCount && notificationCount > 0 ? (
-            <Badge variant="destructive" className="h-5 w-5 p-0 flex items-center justify-center text-xs rounded-full bg-blue-500 hover:bg-blue-600">
+            <Badge variant="destructive" className="h-5 w-5 p-0 flex items-center justify-center text-xs rounded-full bg-[#075e54] hover:bg-[#064c44]">
               {notificationCount}
             </Badge>
           ) : null}
@@ -261,10 +280,10 @@ const telegramNotConnected = () => {
   const navigate = useNavigate();
 
   return (
-    <Card className="h-full w-full border-none shadow-none bg-[#ECE5DD]/10">
+    <Card className="h-full w-full border-none shadow-none bg-white">
       <CardContent className="flex flex-col items-center justify-center h-full py-10">
-        <div className="p-4 rounded-full bg-gray-800 mb-4">
-          <FiMessageSquare className="w-8 h-8 text-green-500" />
+        <div className="p-4 rounded-full bg-neutral-900 mb-4">
+          <FiMessageSquare className="w-8 h-8 text-[#075e54]" />
         </div>
         <CardTitle className="text-xl mb-2">telegram Not Connected</CardTitle>
         <CardDescription className="text-center mb-6 max-w-md">
@@ -272,7 +291,7 @@ const telegramNotConnected = () => {
         </CardDescription>
         <Button 
           onClick={() => navigate('/settings')}
-          className="bg-green-600 hover:bg-green-700 text-white"
+          className="bg-[#075e54] hover:bg-[#064c44] text-white"
         >
           Connect telegram
         </Button>
@@ -286,10 +305,10 @@ const NoPlatformsConnected = () => {
   const navigate = useNavigate();
 
   return (
-    <Card className="h-full w-full border-none shadow-none bg-neutral-900/10">
+    <Card className="h-full w-full border-none shadow-none bg-white">
       <CardContent className="flex flex-col items-center justify-center h-full py-10">
-        <div className="p-4 rounded-full bg-gray-800 mb-4">
-          <FiMessageSquare className="w-8 h-8 text-blue-500" />
+        <div className="p-4 rounded-full bg-neutral-900 mb-4">
+          <FiMessageSquare className="w-8 h-8 text-[#075e54]" />
         </div>
         <CardTitle className="text-xl mb-2">No Platforms Connected</CardTitle>
         <CardDescription className="text-center mb-6 max-w-md">
@@ -297,7 +316,7 @@ const NoPlatformsConnected = () => {
         </CardDescription>
         <Button 
           onClick={() => navigate('/settings')}
-          className="bg-blue-600 hover:bg-blue-700 text-white"
+          className="bg-[#075e54] hover:bg-[#064c44] text-white"
         >
           Go to Settings
         </Button>
@@ -316,6 +335,9 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
   
   // CRITICAL FIX: Get the actual priorityMap from Redux state
   const priorityMap = useSelector((state: RootState) => state.contacts.priorityMap);
+
+  // Get notifications from Liveblocks
+  const { inboxNotifications } = useInboxNotifications();
 
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastManualRefreshTime, setLastManualRefreshTime] = useState(0);
@@ -339,14 +361,28 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
   });
   const [showPriorityFilter, setShowPriorityFilter] = useState(false);
   const [sortBy, setSortBy] = useState('activity'); // 'activity', 'priority', 'name'
+  const [forceRefreshKey, setForceRefreshKey] = useState(0); // CRITICAL FIX: Force refresh key for real-time updates
 
   // Platform verification state
   const [isVerifyingPlatform, setIsVerifyingPlatform] = React.useState(false);
   const [verificationMessage, setVerificationMessage] = React.useState('');
 
-  // Get notifications from Liveblocks
-  const { inboxNotifications } = useInboxNotifications();
+  // CRITICAL FIX: Track processed messages to prevent duplicates - MOVED BEFORE useEffect hooks
+  const processedMessageIds = useRef(new Set<string>());
+  
+  // CRITICAL FIX: Clear old processed message IDs periodically
+  useEffect(() => {
+    const cleanup = setInterval(() => {
+      if (processedMessageIds.current.size > 1000) {
+        processedMessageIds.current.clear();
+        logger.info('[TelegramContactList] Cleared processed message IDs cache');
+      }
+    }, 60000); // Clean every minute
+    
+    return () => clearInterval(cleanup);
+  }, []);
 
+  // CRITICAL FIX: Move unreadNotificationCounts BEFORE forceContactResort to fix linter error
   const unreadNotificationCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     if (inboxNotifications) {
@@ -357,24 +393,90 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
       }
     }
     return counts;
-  }, [inboxNotifications]);
+  }, [inboxNotifications, forceRefreshKey]); // CRITICAL FIX: Add forceRefreshKey to dependencies
 
+  // CRITICAL FIX: Force contact list re-sorting by updating array reference - MOVED AFTER unreadNotificationCounts
+  const forceContactResort = useCallback(() => {
+    // 🚀 CRITICAL FIX: Instead of sorting a local copy, we need to trigger the useMemo re-computation
+    // The useMemo depends on contacts, so we need to ensure the contacts array gets a new reference
+    // We'll do this by updating the forceRefreshKey which is in the useMemo dependencies
+    
+    logger.info('[TelegramContactList] 🔄 FORCING CONTACT RESORT - Triggering re-sort via forceRefreshKey');
+    
+    // Force re-render triggers - this will cause the useMemo to re-run
+    setLastManualRefreshTime(Date.now());
+    setForceRefreshKey(prev => prev + 1);
+    
+    // Also log current contact order for debugging
+    setTimeout(() => {
+      const sortedContacts = [...contacts].sort((a, b) => {
+        if (!a || !b || !a.id || !b.id) return 0;
+        
+        try {
+          // Get notification counts
+          const aNotifications = unreadNotificationCounts[a.id] || 0;
+          const bNotifications = unreadNotificationCounts[b.id] || 0;
+          
+          // 🚀 CRITICAL FIX: Latest message timestamp should be PRIMARY sort criteria
+          const aTime = a.last_message_at ? new Date(a.last_message_at).getTime() : 0;
+          const bTime = b.last_message_at ? new Date(b.last_message_at).getTime() : 0;
+          
+          // STEP 1: Latest message ALWAYS wins first (regardless of notifications)
+          if (aTime !== bTime) {
+            return bTime - aTime; // Most recent first
+          }
+          
+          // STEP 2: If same timestamp, then notifications get priority
+          if (aNotifications !== bNotifications) {
+            return bNotifications - aNotifications;
+          }
+          
+          return 0;
+        } catch (error) {
+          return 0;
+        }
+      });
+      
+      logger.info('[TelegramContactList] 🔄 EXPECTED NEW ORDER after resort:', 
+        sortedContacts.slice(0, 3).map(c => ({ 
+          id: c.id, 
+          name: c.display_name, 
+          last_message: c.last_message?.substring(0, 20),
+          last_message_at: c.last_message_at 
+        }))
+      );
+    }, 150); // Small delay to see the result
+  }, [contacts, unreadNotificationCounts, setLastManualRefreshTime, setForceRefreshKey]);
+
+  // CRITICAL FIX: Optimize loadContactsWithRetry to prevent infinite loops
   const loadContactsWithRetry = useCallback(async (retryCount = 0) => {
     try {
       if (!session?.user?.id) {
-        logger.warn('[telegramContactList] No valid user ID in session, cannot fetch contacts');
+        logger.warn('[TelegramContactList] No valid user ID in session, cannot fetch contacts');
         return;
       }
       
-      logger.info('[telegramContactList] Fetching contacts...');
+      // CRITICAL FIX: Prevent duplicate fetches by checking if already loading
+      if (loading && retryCount === 0) {
+        logger.info('[TelegramContactList] Already loading contacts, skipping duplicate fetch');
+        return;
+      }
+      
+      // Log active platform for debugging (reduced logging)
+      const activePlatform = localStorage.getItem('dailyfix_active_platform');
+      if (activePlatform !== 'telegram') {
+        logger.info('[TelegramContactList] Not active platform, skipping fetch');
+        return;
+      }
+      
+      logger.info('[TelegramContactList] Fetching contacts...');
       const result = await dispatch(fetchContacts({
         userId: session.user.id,
         platform: 'telegram'
       })).unwrap();
-      logger.info('[Contacts fetch log from component] result: ', result);
 
       if (result?.inProgress) {
-        logger.info('[telegramContactList] Sync in progress, showing sync state');
+        logger.info('[TelegramContactList] Sync in progress, showing sync state');
         setSyncProgress({
           state: SYNC_STATES.SYNCING,
           message: 'Syncing contacts...'
@@ -389,10 +491,10 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
      //    }
      //  }
     } catch (err) {
-      logger.error('[telegramContactList] Error fetching contacts:', err);
+      logger.error('[TelegramContactList] Error fetching contacts:', err);
       if (retryCount < MAX_RETRIES) {
         const delay = INITIAL_RETRY_DELAY * Math.pow(2, retryCount);
-        logger.info(`[telegramContactList] Retrying in ${delay}ms (attempt ${retryCount + 1}/${MAX_RETRIES})`);
+        logger.info(`[TelegramContactList] Retrying in ${delay}ms (attempt ${retryCount + 1}/${MAX_RETRIES})`);
         setTimeout(() => {
           loadContactsWithRetry(retryCount + 1);
         }, delay);
@@ -400,7 +502,7 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
         // toast.error('Failed to load contacts after multiple attempts');
       }
     }
-  }, [dispatch, syncProgress, session, navigate]);
+  }, [dispatch, syncProgress, session, navigate, loading]);
 
   const handleRefresh = async () => {
     if (refreshCooldown) {
@@ -425,7 +527,7 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
 
     const now = Date.now();
     if (now - lastManualRefreshTime < 3000) {
-      toast.info('Please wait a moment before refreshing again');
+      toast('Please wait a moment before refreshing again');
       return;
     }
 
@@ -435,11 +537,11 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
     // CRITICAL FIX: Set a timeout to ensure we don't get stuck
     const syncTimeout = setTimeout(() => {
       if (syncProgress && syncProgress.state === SYNC_STATES.SYNCING) {
-        logger.warn('[telegramContactList] Sync timeout reached, forcing completion');
+        logger.warn('[TelegramContactList] Sync timeout reached, forcing completion');
         setRefreshCooldown(false);
         setIsRefreshing(false);
         setSyncProgress({
-          state: SYNC_STATES.COMPLETED,
+          state: SYNC_STATES.APPROVED,
           message: 'Sync timed out, showing available contacts',
           progress: 100
         });
@@ -494,7 +596,7 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
       } else {
         // Sync completed immediately
         setSyncProgress({
-          state: SYNC_STATES.COMPLETED,
+          state: SYNC_STATES.APPROVED,
           message: 'Sync completed successfully',
           progress: 100
         });
@@ -503,6 +605,7 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
         // Reset cooldown after a short delay
         setTimeout(() => {
           setRefreshCooldown(false);
+          setSyncProgress(null); // ✅ Clear sync progress after completion
         }, 2000);
 
         // Clear the sync timeout
@@ -519,7 +622,7 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
 
       toast.error('Sync encountered an issue: ' + errorMessage);
       setSyncProgress({
-        state: SYNC_STATES.ERROR,
+        state: SYNC_STATES.REJECTED,
         message: errorMessage,
         progress: 0
       });
@@ -580,10 +683,15 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
           clearInterval(pollInterval);
           setRefreshCooldown(false);
           setSyncProgress({
-            state: SYNC_STATES.COMPLETED,
+            state: SYNC_STATES.APPROVED,
             message: 'Sync completed (timeout)',
             progress: 100
           });
+
+          // Clear sync progress after timeout
+          setTimeout(() => {
+            setSyncProgress(null);
+          }, 2000);
 
           // Fetch the updated contacts
           if (session?.user?.id) {
@@ -610,7 +718,7 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
               clearInterval(pollInterval);
               setRefreshCooldown(false);
               setSyncProgress({
-                state: SYNC_STATES.COMPLETED,
+                state: SYNC_STATES.APPROVED,
                 message: 'Sync completed successfully',
                 progress: 100
               });
@@ -634,7 +742,7 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
           clearInterval(pollInterval);
           setRefreshCooldown(false);
           setSyncProgress({
-            state: SYNC_STATES.COMPLETED,
+            state: SYNC_STATES.APPROVED,
             message: 'Sync completed successfully',
             progress: 100
           });
@@ -662,7 +770,7 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
           clearInterval(pollInterval);
           setRefreshCooldown(false);
           setSyncProgress({
-            state: SYNC_STATES.COMPLETED,
+            state: SYNC_STATES.APPROVED,
             message: 'Sync completed (timeout)',
             progress: 100
           });
@@ -687,7 +795,7 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
           clearInterval(pollInterval);
           setRefreshCooldown(false);
           setSyncProgress({
-            state: SYNC_STATES.COMPLETED,
+            state: SYNC_STATES.APPROVED,
             message: 'Sync status unknown, showing available contacts',
             progress: 100
           });
@@ -709,7 +817,7 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
         clearInterval(pollInterval);
         logger.info('[telegramContactList] Safety cleanup triggered for sync polling');
         setSyncProgress({
-          state: SYNC_STATES.COMPLETED,
+          state: SYNC_STATES.APPROVED,
           message: 'Sync timed out',
           progress: 100
         });
@@ -717,7 +825,7 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
       if (refreshCooldown) {
         setRefreshCooldown(false);
         setSyncProgress({
-          state: SYNC_STATES.COMPLETED,
+          state: SYNC_STATES.APPROVED,
           message: 'Sync status polling timed out',
           progress: 100
         });
@@ -728,7 +836,7 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
   const handleContactSelect = useCallback(async (contact) => {
     // Prevent contact selection if refresh is required
     if (refreshRequired) {
-      toast.info('Please refresh contacts first');
+      toast('Please refresh contacts first');
       return;
     }
     
@@ -809,6 +917,211 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
   //   }
   // }, [dispatch]);
 
+  // CRITICAL FIX: Optimized socket initialization to prevent infinite loops
+  useEffect(() => {
+    const initSocket = async () => {
+      try {
+        // Add explicit check for valid session before initializing socket
+        if (!session?.access_token || !session?.user?.id) {
+          logger.warn('[TelegramContactList] Cannot initialize socket - no valid session');
+          return;
+        }
+
+        // Now attempt socket initialization with the validated session
+        const socket = await initializeSocket({ platform: 'telegram' });
+
+        if (!socket) {
+          logger.error('[TelegramContactList] Failed to get socket instance');
+          return;
+        }
+
+        const handleSyncProgress = (data) => {
+          if (data.userId === session.user.id) {
+            setSyncProgress({
+              state: SYNC_STATES.SYNCING,
+              progress: data.progress,
+              message: data.details || 'Syncing contacts...'
+            });
+          }
+        };
+
+        const handleSyncComplete = (data) => {
+          if (data.userId === session.user.id) {
+            setSyncProgress(null);
+            // Only reload if we're the active platform
+            const activePlatform = localStorage.getItem('dailyfix_active_platform');
+            if (activePlatform === 'telegram') {
+              loadContactsWithRetry();
+            }
+          }
+        };
+
+        const handleSyncError = (data) => {
+          if (data.userId === session.user.id) {
+            setSyncProgress({
+              state: SYNC_STATES.REJECTED,
+              message: data.error || 'Sync failed'
+            });
+            toast.error('Contact sync failed: ' + (data.error || 'Unknown error'));
+          }
+        };
+
+        const handleContactRemoved = (data) => {
+          if (data.userId === session.user.id) {
+            logger.info('[TelegramContactList] Contact removed by backend via socket:', {
+              contactId: data.contactId,
+              reason: data.reason
+            });
+            
+            // Remove from Redux state
+            dispatch(hideContact(data.contactId));
+            
+            // Clear selection if the removed contact was currently selected
+            if (selectedContactId === data.contactId) {
+              onContactSelect(null);
+            }
+            
+            // Show informative toast
+            toast.success(data.message || 'Contact has been automatically removed', {
+              duration: 6000,
+              style: {
+                background: '#10B981',
+                color: '#ffffff',
+                border: 'none',
+                borderRadius: '8px',
+                boxShadow: '0 4px 12px rgba(16, 185, 129, 0.15)',
+              },
+            });
+          }
+        };
+
+        // Add listeners for real-time updates
+        socket.on('telegram:sync_progress', handleSyncProgress);
+        socket.on('telegram:sync_complete', handleSyncComplete);
+        socket.on('telegram:sync_error', handleSyncError);
+        socket.on('telegram:contact:removed', handleContactRemoved);
+
+        // 🚨 CRITICAL FIX: JOIN USER ROOM TO RECEIVE BACKEND EVENTS
+        const userRoom = `user:${session.user.id}`;
+        socket.emit('join:room', userRoom);
+        logger.info(`[TelegramContactList] 🎯 JOINING USER ROOM: ${userRoom}`);
+        
+        // 🚨 CRITICAL FIX: Authenticate with user ID for targeted events
+        socket.emit('authenticate', { userId: session.user.id });
+        logger.info(`[TelegramContactList] 🎯 AUTHENTICATING USER: ${session.user.id}`);
+
+        // 🚨 CRITICAL FIX: Add confirmation handlers
+        socket.on('room:joined', (data) => {
+          logger.info(`[TelegramContactList] ✅ ROOM JOINED CONFIRMED: ${data.roomId}`);
+        });
+        
+        socket.on('authenticated', (data) => {
+          logger.info(`[TelegramContactList] ✅ AUTHENTICATION CONFIRMED:`, data);
+        });
+        
+        socket.on('room:error', (data) => {
+          logger.error(`[TelegramContactList] ❌ ROOM JOIN ERROR:`, data);
+        });
+
+        // CRITICAL FIX: Add missing real-time message listeners
+        socket.on('telegram:contact_auto_created', (data: any) => {
+          logger.info('🎯 Auto-created contact received via WebSocket:', {
+            contactId: data.contact?.id,
+            displayName: data.contact?.display_name,
+            platform: data.platform,
+            source: data.source
+          });
+          
+          // Refresh contact list to include the new auto-created contact
+          if (session?.user?.id) {
+            dispatch(fetchContacts({
+              userId: session.user.id,
+              platform: 'telegram'
+            }));
+          }
+          
+          // Show success notification
+          toast.success(`New contact "${data.contact?.display_name}" auto-created successfully`);
+        });
+
+        // CRITICAL FIX: Listen for real-time message updates
+        socket.on('telegram:message_received', (data: any) => {
+          // 🚀 CRITICAL FIX: Create unique message ID to prevent duplicates
+          const messageId = `${data.contactId}-${data.timestamp}-${data.message?.substring(0, 10)}`;
+          
+          if (processedMessageIds.current.has(messageId)) {
+            logger.debug('[TelegramContactList] Skipping duplicate message:', { messageId, contactId: data.contactId });
+            return;
+          }
+          
+          processedMessageIds.current.add(messageId);
+          
+          logger.info('📨 Message received via WebSocket:', {
+            contactId: data.contactId,
+            message: data.message,
+            timestamp: data.timestamp,
+            messageId
+          });
+          
+          // Update contact's last message in real-time
+          if (data.contactId && data.message) {
+            dispatch(updateContactLastMessage({
+              contactId: data.contactId,
+              lastMessage: data.message,
+              lastMessageAt: data.timestamp
+            }));
+            
+            // 🚀 CRITICAL FIX: Force immediate re-render and re-sort
+            setTimeout(() => {
+              forceContactResort();
+            }, 100); // Small delay to ensure Redux state updates first
+          }
+        });
+
+        // CRITICAL FIX: Also listen for traditional telegram:message events
+        socket.on('telegram:message', (data: any) => {
+          logger.info('📨 Traditional message received via WebSocket:', {
+            contactId: data.contactId,
+            messageContent: data.message?.content,
+            messageId: data.message?.message_id
+          });
+          
+          // Update contact's last message from traditional system
+          if (data.contactId && data.message) {
+            const messageText = data.message.content || data.message.body || '';
+            const messageTime = data.message.timestamp || data.message.sent_at || Date.now();
+            
+            dispatch(updateContactLastMessage({
+              contactId: data.contactId,
+              lastMessage: messageText,
+              lastMessageAt: messageTime
+            }));
+          }
+        });
+
+        return () => {
+          socket.off('telegram:sync_progress', handleSyncProgress);
+          socket.off('telegram:sync_complete', handleSyncComplete);
+          socket.off('telegram:sync_error', handleSyncError);
+          socket.off('telegram:contact:removed', handleContactRemoved);
+          socket.off('telegram:contact_auto_created');
+          socket.off('telegram:message_received');
+          socket.off('telegram:message'); // Clean up traditional listener
+          socket.off('room:joined');
+          socket.off('authenticated');
+          socket.off('room:error');
+        };
+      } catch (error) {
+        logger.error('[TelegramContactList] Socket initialization error:', error);
+      }
+    };
+
+    // Only attempt to initialize the socket if we have a session
+    if (session?.access_token) {
+      initSocket();
+    }
+  }, [session?.access_token, session?.user?.id, dispatch, forceContactResort]);
+
   useEffect(() => {
     if (!session) {
       logger.warn('[telegramContactList] No session found, redirecting to login');
@@ -826,76 +1139,141 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
     loadContactsWithRetry();
   }, [session, navigate, loadContactsWithRetry]);
 
+  // CRITICAL FIX: Enhanced real-time contact updates from Liveblocks notifications
   useEffect(() => {
-    const initSocket = async () => {
-      try {
-        // Add explicit check for valid session before initializing socket
-        if (!session?.access_token || !session?.user?.id) {
-          logger.warn('[telegramContactList] Cannot initialize socket - no valid session');
-          return; // Exit early if no valid session
+    if (inboxNotifications && inboxNotifications.length > 0) {
+      // Process new unread notifications to update contact last messages
+      const newNotifications = inboxNotifications.filter(notification => !notification.readAt);
+      
+      newNotifications.forEach(notification => {
+        if (notification.kind === '$telegramMessage' && notification.activities?.[0]?.data) {
+          const activityData = notification.activities[0].data;
+          const { contact_id, message, timestamp } = activityData;
+          
+          if (contact_id && message) {
+            // 🚀 CRITICAL FIX: Create unique message ID to prevent duplicates
+            const messageText = String(message); // Convert to string first
+            const messageId = `liveblocks-${contact_id}-${timestamp}-${messageText?.substring(0, 10)}`;
+            
+            if (processedMessageIds.current.has(messageId)) {
+              logger.debug('[TelegramContactList] Skipping duplicate Liveblocks message:', { messageId, contact_id });
+              return;
+            }
+            
+            processedMessageIds.current.add(messageId);
+            
+            logger.info('🔔 Processing Liveblocks notification for real-time contact update:', {
+              contactId: contact_id,
+              message: messageText,
+              timestamp: timestamp,
+              messageId
+            });
+            
+            // Update contact's last message from Liveblocks notification
+            dispatch(updateContactLastMessage({
+              contactId: parseInt(String(contact_id)),
+              lastMessage: messageText,
+              lastMessageAt: timestamp || Date.now()
+            }));
+            
+            // 🚀 CRITICAL FIX: Force contact resort after Redux update
+            setTimeout(() => {
+              forceContactResort();
+            }, 100);
+          }
         }
+      });
+    }
+  }, [inboxNotifications, dispatch, forceContactResort]);
 
-        logger.info('[telegramContactList] Initializing socket with session:', {
-          hasToken: !!session?.access_token,
-          userId: session?.user?.id
-        });
-
-        // Now attempt socket initialization with the validated session
-        const socket = await initializeSocket({ platform: 'telegram' });
-
-        if (!socket) {
-          logger.error('[telegramContactList] Failed to get socket instance');
+  // 🚀 CRITICAL FIX: Listen for user's own SENT messages to update contact list
+  useEffect(() => {
+    const handleSentMessage = (event: CustomEvent) => {
+      const { contactId, message, timestamp } = event.detail;
+      
+      if (contactId && message) {
+        // 🚀 CRITICAL FIX: Create unique message ID to prevent duplicates
+        const messageId = `sent-${contactId}-${timestamp}-${message?.substring(0, 10)}`;
+        
+        if (processedMessageIds.current.has(messageId)) {
+          logger.debug('[TelegramContactList] Skipping duplicate sent message:', { messageId, contactId });
           return;
         }
-
-        const handleSyncProgress = (data) => {
-          if (data.userId === session.user.id) {
-            setSyncProgress({
-              state: SYNC_STATES.SYNCING,
-              progress: data.progress,
-              message: data.details || 'Syncing contacts...'
-            });
-          }
-        };
-
-        const handleSyncComplete = (data) => {
-          if (data.userId === session.user.id) {
-            setSyncProgress(null);
-            loadContactsWithRetry();
-          }
-        };
-
-        const handleSyncError = (data) => {
-          if (data.userId === session.user.id) {
-            setSyncProgress({
-              state: SYNC_STATES.ERROR,
-              message: data.error || 'Sync failed'
-            });
-            toast.error('Contact sync failed: ' + (data.error || 'Unknown error'));
-          }
-        };
-
-        socket.on('telegram:sync_progress', handleSyncProgress);
-        socket.on('telegram:sync_complete', handleSyncComplete);
-        socket.on('telegram:sync_error', handleSyncError);
-
-        return () => {
-          socket.off('telegram:sync_progress', handleSyncProgress);
-          socket.off('telegram:sync_complete', handleSyncComplete);
-          socket.off('telegram:sync_error', handleSyncError);
-        };
-      } catch (error) {
-        logger.error('[telegramContactList] Socket initialization error:', error);
+        
+        processedMessageIds.current.add(messageId);
+        
+        logger.info('🎯 User sent message - updating contact list:', {
+          contactId,
+          message,
+          timestamp,
+          messageId
+        });
+        
+        // Update contact's last message with sent message
+        dispatch(updateContactLastMessage({
+          contactId: parseInt(contactId),
+          lastMessage: message,
+          lastMessageAt: timestamp || Date.now()
+        }));
+        
+        // 🚀 CRITICAL FIX: Force contact resort after Redux update
+        setTimeout(() => {
+          forceContactResort();
+        }, 100);
       }
     };
 
-    // Only attempt to initialize the socket if we have a session
-    if (session?.access_token) {
-      initSocket();
-    } else {
-      logger.warn('[telegramContactList] Skipping socket initialization - no session available');
-    }
-  }, [session, loadContactsWithRetry]);
+    // Listen for sent message events from ChatView
+    window.addEventListener('telegram-message-sent', handleSentMessage as EventListener);
+    
+    return () => {
+      window.removeEventListener('telegram-message-sent', handleSentMessage as EventListener);
+    };
+  }, [dispatch, forceContactResort]);
+
+  // CRITICAL FIX: Listen for custom events from notification system
+  useEffect(() => {
+    const handleMessageUpdate = (event: CustomEvent) => {
+      const { contactId, message, timestamp } = event.detail;
+      
+      if (contactId && message) {
+        // 🚀 CRITICAL FIX: Create unique message ID to prevent duplicates
+        const messageId = `custom-${contactId}-${timestamp}-${message?.substring(0, 10)}`;
+        
+        if (processedMessageIds.current.has(messageId)) {
+          logger.debug('[TelegramContactList] Skipping duplicate custom message:', { messageId, contactId });
+          return;
+        }
+        
+        processedMessageIds.current.add(messageId);
+        
+        logger.info('🎯 Received message update event:', {
+          contactId,
+          message,
+          timestamp,
+          messageId
+        });
+        
+        // Update contact's last message
+        dispatch(updateContactLastMessage({
+          contactId: parseInt(contactId),
+          lastMessage: message,
+          lastMessageAt: timestamp || Date.now()
+        }));
+        
+        // 🚀 CRITICAL FIX: Force contact resort after Redux update
+        setTimeout(() => {
+          forceContactResort();
+        }, 100);
+      }
+    };
+
+    window.addEventListener('telegram-message-update', handleMessageUpdate as EventListener);
+    
+    return () => {
+      window.removeEventListener('telegram-message-update', handleMessageUpdate as EventListener);
+    };
+  }, [dispatch, forceContactResort]);
 
   useEffect(() => {
     const isInitialSync = !hasShownAcknowledgment && contacts.length === 1 &&
@@ -1004,7 +1382,7 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
       });
     }
 
-    // Apply sorting
+    // 🚀 CRITICAL FIX: Proper sorting like real messaging apps - LATEST MESSAGE FIRST ALWAYS
     return filtered.sort((a, b) => {
       // CRITICAL FIX: Add safety checks for contact existence
       if (!a || !b || !a.id || !b.id) return 0;
@@ -1014,7 +1392,21 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
         const aNotifications = unreadNotificationCounts[a.id] || 0;
         const bNotifications = unreadNotificationCounts[b.id] || 0;
         
-        // Get priorities for both contacts with safety checks
+        // 🔥 STEP 1: LATEST MESSAGE TIME is the PRIMARY sort criteria (like real Telegram)
+        const aTime = a.last_message_at ? new Date(a.last_message_at).getTime() : 0;
+        const bTime = b.last_message_at ? new Date(b.last_message_at).getTime() : 0;
+        
+        // CRITICAL: Latest message ALWAYS wins first (sent OR received)
+        if (aTime !== bTime) {
+          return bTime - aTime; // Most recent activity first
+        }
+        
+        // 🔥 STEP 2: If same timestamp, then unread notifications get priority
+        if (aNotifications !== bNotifications) {
+          return bNotifications - aNotifications;
+        }
+        
+        // 🔥 STEP 3: If same notifications and time, use priority as tiebreaker
         let aPriority, bPriority;
         try {
           aPriority = selectContactPriority({ contacts: { items: contacts, priorityMap: priorityMap } }, a.id);
@@ -1030,52 +1422,16 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
           bPriority = 'low';
         }
         
-        // Priority order mapping
         const priorityOrder = { 'high': 3, 'medium': 2, 'low': 1 };
         const aPriorityScore = priorityOrder[aPriority] || 0;
         const bPriorityScore = priorityOrder[bPriority] || 0;
 
-        switch (sortBy) {
-          case 'priority':
-            // Sort by priority first, then by notifications, then by activity
-            if (aPriorityScore !== bPriorityScore) {
-              return bPriorityScore - aPriorityScore; // Higher priority first
-            }
-            if (aNotifications !== bNotifications) {
-              return bNotifications - aNotifications; // More notifications first
-            }
-            // Fall through to activity sorting
-            break;
-            
-          case 'name':
-            // Sort alphabetically, but prioritize contacts with notifications
-            if (aNotifications !== bNotifications) {
-              return bNotifications - aNotifications; // Notifications first
-            }
-            return (a.display_name || '').localeCompare(b.display_name || '');
-            
-          case 'activity':
-          default:
-            // Sort by notifications first, then by last message time, then by priority
-            if (aNotifications !== bNotifications) {
-              return bNotifications - aNotifications; // More notifications first
-            }
-            
-            const aTime = new Date(a.last_message_at || 0).getTime();
-            const bTime = new Date(b.last_message_at || 0).getTime();
-            
-            if (aTime !== bTime) {
-              return bTime - aTime; // More recent activity first
-            }
-            
-            // If same activity time, sort by priority
-            return bPriorityScore - aPriorityScore;
+        if (aPriorityScore !== bPriorityScore) {
+          return bPriorityScore - aPriorityScore;
         }
-
-        // Default fallback to activity time
-        const aTime = new Date(a.last_message_at || 0).getTime();
-        const bTime = new Date(b.last_message_at || 0).getTime();
-        return bTime - aTime;
+        
+        // 🔥 STEP 4: Final fallback - alphabetical
+        return (a.display_name || '').localeCompare(b.display_name || '');
       } catch (error) {
         logger.error('[TelegramContactList] Error in contact sorting:', { 
           contactA: a.id, 
@@ -1085,7 +1441,7 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
         return 0; // Keep original order if sorting fails
       }
     });
-  }, [filteredContacts, searchQuery, priorityFilter, sortBy, unreadNotificationCounts, contacts, priorityMap]);
+  }, [filteredContacts, searchQuery, priorityFilter, sortBy, unreadNotificationCounts, contacts, priorityMap, forceRefreshKey, lastManualRefreshTime]); // CRITICAL FIX: Add contact data changes to dependencies
 
   const searchedContacts = processedContacts; // For backward compatibility
 
@@ -1116,27 +1472,26 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
   }, [loadContactsWithRetry]);
 
   return (
-    <Card className="flex flex-col h-full w-full border-none shadow-none rounded-lg bg-gray-900 relative">
-      <CardHeader className="p-4 bg-gray-800 border-b border-gray-800">
+    <Card className="flex flex-col h-full w-full border-none shadow-none rounded-lg bg-white relative">
+      <CardHeader className="p-4 bg-neutral-900 border-b border-gray-200">
         <div className="flex items-center justify-between">
-          <CardTitle className="text-white font-bold text-xl">Telegram Chats</CardTitle>
+          <CardTitle className="text-[#ece5dd] font-bold text-xl">Telegram Chats</CardTitle>
           <div className="flex items-center space-x-2 relative">
             {isRefreshing ? (
-              <MdCloudSync className="animate-spin text-blue-500 w-6 h-6" />
+              <MdCloudSync className="animate-spin text-[#66b5ac] w-6 h-6" />
             ) : refreshCooldown ? (
-              <MdCloudSync className="text-blue-500 w-6 h-6 pulse-animation" />
+              <MdCloudSync className="text-[#66b5ac] w-6 h-6 pulse-animation" />
             ) : (
-              <FiRefreshCw className="text-blue-500 w-6 h-6" />
+              <FiRefreshCw className="text-[#66b5ac] w-6 h-6" />
             )}
             <div className="flex flex-col">
               <Button
-                ref={refreshButtonRef}
                 onClick={handleRefresh}
                 disabled={loading || isRefreshing}
                 variant="ghost"
-                className={`bg-gray-800 border-gray-700 text-white inline-flex px-3 py-1 items-center justify-center rounded-lg text-sm ${
+                className={`bg-neutral-900 border-white/10 text-white inline-flex px-3 py-1 items-center justify-center rounded-lg text-sm ${
                   loading || isRefreshing ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-700'
-                } ${refreshCooldown ? 'bg-gray-700' : ''} ${refreshRequired ? 'animate-pulse bg-blue-700 hover:bg-blue-600' : ''}`}
+                } ${refreshCooldown ? 'bg-gray-700' : ''} ${refreshRequired ? 'animate-pulse bg-[#075e54] hover:bg-[#064c44]' : ''}`}
                 onMouseEnter={() => refreshCooldown ? setRefreshTooltip('Sync in progress') : refreshRequired && setRefreshTooltip('Click to refresh contacts')}
                 onMouseLeave={() => setRefreshTooltip('')}
               >
@@ -1162,7 +1517,7 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
       </CardHeader>
 
       {/* Enhanced Search and Filter Section */}
-      <div className="sticky top-0 z-10 p-4 bg-gray-900 border-b border-gray-700 space-y-3">
+      <div className="sticky top-0 z-10 p-4 bg-white border-b border-gray-200 space-y-3">
         {/* Search Input */}
         <div className="relative">
           <Input
@@ -1170,7 +1525,7 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search contacts and messages..."
-            className="w-full bg-gray-800 text-white px-10 py-2 rounded-lg border border-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-500 placeholder-gray-400"
+            className="w-full bg-white text-black px-10 py-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-1 focus:ring-[#075e54] placeholder-gray-500"
           />
           <FiSearch className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
           {searchQuery && (
@@ -1178,7 +1533,7 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
               onClick={() => setSearchQuery('')}
               variant="ghost"
               size="icon"
-              className="absolute right-3 top-1/2 transform -translate-y-1/2 h-6 w-6 p-0 text-gray-400 hover:text-white"
+              className="absolute right-3 top-1/2 transform -translate-y-1/2 h-6 w-6 p-0 text-gray-400 hover:text-black"
             >
               <FiX className="h-4 w-4" />
               <span className="sr-only">Clear search</span>
@@ -1191,18 +1546,18 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
           {/* Sort Dropdown */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" className="text-xs bg-gray-800 border-gray-600 text-white hover:bg-gray-700">
+              <Button variant="outline" size="sm" className="text-xs bg-white border-gray-300 text-black hover:bg-gray-100">
                 Sort: {sortBy === 'activity' ? 'Recent' : sortBy === 'priority' ? 'Priority' : 'Name'}
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent className="bg-gray-800 border-gray-600">
-              <DropdownMenuItem onSelect={() => setSortBy('activity')} className="text-white hover:bg-gray-700">
+            <DropdownMenuContent className="bg-white border-gray-300">
+              <DropdownMenuItem onSelect={() => setSortBy('activity')} className="text-black hover:bg-gray-100">
                 Recent Activity
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setSortBy('priority')} className="text-white hover:bg-gray-700">
+              <DropdownMenuItem onSelect={() => setSortBy('priority')} className="text-black hover:bg-gray-100">
                 Priority Level
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setSortBy('name')} className="text-white hover:bg-gray-700">
+              <DropdownMenuItem onSelect={() => setSortBy('name')} className="text-black hover:bg-gray-100">
                 Alphabetical
               </DropdownMenuItem>
             </DropdownMenuContent>
@@ -1214,19 +1569,19 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
               <Button 
                 variant={showPriorityFilter ? "default" : "outline"} 
                 size="sm" 
-                className="text-xs bg-gray-800 border-gray-600 text-white hover:bg-gray-700"
+                className="text-xs bg-white border-gray-300 text-black hover:bg-gray-100"
               >
                 <FiFilter className="w-3 h-3 mr-1" />
                 Filter
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent className="bg-gray-800 border-gray-600">
+            <DropdownMenuContent className="bg-white border-gray-300">
               <DropdownMenuCheckboxItem
                 checked={priorityFilter.high}
                 onCheckedChange={(checked) => 
                   setPriorityFilter(prev => ({ ...prev, high: checked }))
                 }
-                className="text-white hover:bg-gray-700"
+                className="text-black hover:bg-gray-100"
               >
                 <Badge variant="outline" className="bg-red-500/10 text-red-500 border-red-500/20 mr-2">
                   High Priority
@@ -1237,7 +1592,7 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
                 onCheckedChange={(checked) => 
                   setPriorityFilter(prev => ({ ...prev, medium: checked }))
                 }
-                className="text-white hover:bg-gray-700"
+                className="text-black hover:bg-gray-100"
               >
                 <Badge variant="outline" className="bg-yellow-500/10 text-yellow-500 border-yellow-500/20 mr-2">
                   Medium Priority
@@ -1248,21 +1603,21 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
                 onCheckedChange={(checked) => 
                   setPriorityFilter(prev => ({ ...prev, low: checked }))
                 }
-                className="text-white hover:bg-gray-700"
+                className="text-black hover:bg-gray-100"
               >
-                <Badge variant="outline" className="bg-blue-500/10 text-blue-500 border-blue-500/20 mr-2">
+                <Badge variant="outline" className="bg-green-500/10 text-green-500 border-green-500/20 mr-2">
                   Low Priority
                 </Badge>
               </DropdownMenuCheckboxItem>
-              <DropdownMenuSeparator className="bg-gray-600" />
+              <DropdownMenuSeparator className="bg-gray-300" />
               <DropdownMenuCheckboxItem
                 checked={priorityFilter.none}
                 onCheckedChange={(checked) => 
                   setPriorityFilter(prev => ({ ...prev, none: checked }))
                 }
-                className="text-white hover:bg-gray-700"
+                className="text-black hover:bg-gray-100"
               >
-                <Badge variant="outline" className="bg-gray-600 text-gray-300 border-gray-500 mr-2">
+                <Badge variant="outline" className="bg-gray-400 text-gray-600 border-gray-400 mr-2">
                   No Priority
                 </Badge>
               </DropdownMenuCheckboxItem>
@@ -1272,7 +1627,7 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
       </div>
 
       {/* Contact List */}
-      <CardContent className="flex-1 overflow-y-auto bg-gray-900 p-6">
+      <CardContent className="flex-1 overflow-y-auto bg-white p-6">
         {loading ? (
           <ShimmerContactList />
         ) : error ? (
@@ -1281,7 +1636,7 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
             <Button
               onClick={() => loadContactsWithRetry()}
               variant="default"
-              className="bg-[#5DAEF6] rounded text-white hover:bg-[#064c44] mt-[3rem]"
+              className="bg-[#075e54] rounded text-white hover:bg-[#064c44] mt-[3rem]"
             >
               Retry
             </Button>
@@ -1290,24 +1645,33 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
           <div className="flex flex-col items-center justify-center p-4 h-full min-h-[300px]">
             {searchQuery ? (
               <p className="text-gray-500">No contacts found matching "{searchQuery}"</p>
-            ) : syncProgress ? (
-              <p className="text-gray-500">Syncing contacts...</p>
-            ) : (
+            ) : syncProgress?.state === SYNC_STATES.SYNCING ? (
               <>
                 <img 
                   src="https://miro.medium.com/v2/resize:fit:1100/format:webp/0*d94Rn5bObhShU7YV.gif" 
-                  alt="Waiting for contacts" 
+                  alt="Syncing contacts" 
                   className="w-32 h-32 mb-4"
                 />
+                <p className="text-gray-500">Syncing contacts...</p>
+                {syncProgress.progress && (
+                  <p className="text-sm text-gray-400 mt-2">{syncProgress.progress}% complete</p>
+                )}
+              </>
+            ) : (
+              <>
+                <div className="p-4 rounded-full bg-neutral-900 mb-4">
+                  <FiMessageSquare className="w-8 h-8 text-gray-500" />
+                </div>
                 <p className="text-gray-500 text-center">
-                  Application syncs new contacts with new messages.<br />
-                  Keep track of the refresh button
+                  There is nothing here right now.<br />
+                  Check back any time soon.
                 </p>
               </>
             )}
           </div>
         ) : (
           <Virtuoso
+            key={`contacts-${forceRefreshKey}-${lastManualRefreshTime}-${JSON.stringify(contacts.map(c => c.last_message_at)).slice(0, 50)}`}
             style={{ height: '100%' }}
             data={searchedContacts}
             itemContent={(index, contact) => {
@@ -1386,15 +1750,15 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
         {/* Overlay that prevents interaction until refreshed */}
         {refreshRequired && !loading && (
           <div className="absolute inset-0 bg-black/50 flex items-center justify-center z-20">
-            <div className="bg-gray-800 p-6 rounded-lg text-center max-w-sm">
-              <FiRefreshCw className="mx-auto text-blue-500 w-10 h-10 mb-4 animate-spin" />
-              <h3 className="text-white font-bold text-xl mb-2">Refresh Required</h3>
-              <p className="text-gray-300 mb-4">
+            <div className="bg-white p-6 rounded-lg text-center max-w-sm">
+              <FiRefreshCw className="mx-auto text-[#075e54] w-10 h-10 mb-4 animate-spin" />
+              <h3 className="text-black font-bold text-xl mb-2">Refresh Required</h3>
+              <p className="text-gray-600 mb-4">
                 Please refresh your contacts to continue
               </p>
               <Button
                 onClick={handleRefresh}
-                className="bg-blue-600 hover:bg-blue-700 text-white"
+                className="bg-[#075e54] hover:bg-[#064c44] text-white"
               >
                 Refresh Now
               </Button>

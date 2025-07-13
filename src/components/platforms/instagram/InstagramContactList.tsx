@@ -334,6 +334,10 @@ const ContactItem = memo(({ contact, onClick, isSelected, notificationCount }: C
                         ? `${contact.last_message.substring(0, 50)}...` 
                         : contact.last_message}
                     </span>
+                  ) : notificationCount && notificationCount > 0 ? (
+                    <span className="italic text-blue-500">
+                      {notificationCount === 1 ? '1 new message' : `${notificationCount} new messages`}
+                    </span>
                   ) : (
                     <span className="italic opacity-70">No messages yet</span>
                   )}

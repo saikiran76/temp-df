@@ -439,7 +439,22 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
       }
 
       try {
-        await dispatch(sendMessage({ contactId: selectedContact.id, message, platform: 'linkedin' }) as any).unwrap();
+        const result = await dispatch(sendMessage({ contactId: selectedContact.id, message, platform: 'linkedin' }) as any).unwrap();
+        
+        // 🚀 CRITICAL FIX: Dispatch event to update contact list with sent message
+        window.dispatchEvent(new CustomEvent('linkedin-message-sent', {
+          detail: {
+            contactId: selectedContact.id,
+            message: content,
+            timestamp: Date.now()
+          }
+        }));
+        
+        logger.info('🎯 Dispatched sent LinkedIn message event for contact list update:', {
+          contactId: selectedContact.id,
+          message: content
+        });
+        
         scrollToBottom();
       } catch (error) {
         logger.error('[ChatView] Error sending message:', error);

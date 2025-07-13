@@ -58,6 +58,10 @@ import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Menu } from "lucide-react"
 
+// 🚀 CRITICAL FIX: Import notification components for real-time message handling
+import TelegramNotifications from "@/components/platforms/telegram/TelegramNotifications"
+import LinkedinNotifications from "@/components/platforms/linkedin/LinkedinNotifications"
+
 // Define interface for contact objects
 interface Contact {
   id: number;
@@ -769,9 +773,48 @@ export default function Page() {
       checkActiveContactList();
     };
 
+    // Handle platform connection changes (including disconnections)
+    const handlePlatformConnectionChange = () => {
+      checkActiveContactList();
+      // Force re-evaluation of platform connection states
+      setTimeout(() => {
+        const currentUser = session?.user;
+        if (currentUser?.id) {
+          // Re-check connection states after disconnect
+          const whatsappConnected = isWhatsAppConnected(currentUser.id);
+          const telegramConnected = isTelegramConnected(currentUser.id);
+          const instagramConnected = isInstagramConnected(currentUser.id);
+          const linkedinConnected = isLinkedInConnected(currentUser.id);
+          
+          // Clear active platform if it's no longer connected
+          const activePlatform = localStorage.getItem('dailyfix_active_platform');
+          if (activePlatform) {
+            if ((activePlatform === 'whatsapp' && !whatsappConnected) ||
+                (activePlatform === 'telegram' && !telegramConnected) ||
+                (activePlatform === 'instagram' && !instagramConnected) ||
+                (activePlatform === 'linkedin' && !linkedinConnected)) {
+              localStorage.removeItem('dailyfix_active_platform');
+              setActiveContactList(null);
+              setSelectedContact(null);
+              setSelectedContactId(null);
+              setIsWhatsAppActive(false);
+              setIsTelegramActive(false);
+              setIsInstagramActive(false);
+              setIsLinkedInActive(false);
+            }
+          }
+        }
+      }, 100);
+    };
+
     window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
-  }, []);
+    window.addEventListener('platform-connection-changed', handlePlatformConnectionChange);
+    
+    return () => {
+      window.removeEventListener('storage', handleStorageChange);
+      window.removeEventListener('platform-connection-changed', handlePlatformConnectionChange);
+    };
+  }, [session?.user]);
 
   // LinkedIn connection monitoring
   useEffect(() => {
@@ -854,6 +897,15 @@ export default function Page() {
       setActiveContactList(null);
     }
   }, [isWhatsAppActive, isTelegramActive, isInstagramActive, isLinkedInActive]);
+
+  // Clear activeContactList when no platforms are connected
+  useEffect(() => {
+    if (!isPlatformConnected) {
+      setActiveContactList(null);
+      setSelectedContact(null);
+      setSelectedContactId(null);
+    }
+  }, [isPlatformConnected]);
 
   return (
     <>
@@ -1173,6 +1225,7 @@ export default function Page() {
                   {/* Notification Bell - Mobile */}
                   {(isWhatsappConnectedActive && activeContactList === 'whatsapp') && <NotificationPopover platform="whatsapp" />}
                   {(isTelegramConnectedActive && activeContactList === 'telegram') && <NotificationPopover platform="telegram" />}
+                  {(isLinkedInConnectedActive && activeContactList === 'linkedin') && <NotificationPopover platform="linkedin" />}
                   
                   <Popover>
                     <PopoverTrigger asChild>
@@ -1300,6 +1353,7 @@ export default function Page() {
                   {/* Notification Bell - Desktop */}
                   {(isWhatsappConnectedActive && activeContactList === 'whatsapp') && <NotificationPopover platform="whatsapp" />}
                   {(isTelegramConnectedActive && activeContactList === 'telegram') && <NotificationPopover platform="telegram" />}
+                  {(isLinkedInConnectedActive && activeContactList === 'linkedin') && <NotificationPopover platform="linkedin" />}
                   
                   {settingsOpen ? (
                     <Button
@@ -1404,7 +1458,7 @@ export default function Page() {
                 {/* Mobile: Either show contact list OR chat view, but not both */}
                 {isMobile && selectedContact ? (
                   <div className="flex-1 h-full w-full bg-chat">
-                    {activeContactList === 'whatsapp' ? (
+                    {isPlatformConnected && activeContactList === 'whatsapp' ? (
                       <div className="flex-1 h-full rounded-lg">
                         <WhatsAppChatView
                           selectedContact={selectedContact}
@@ -1416,7 +1470,7 @@ export default function Page() {
                           onClose={handleChatClose}
                         />
                       </div>
-                    ) : activeContactList === 'telegram' ? (
+                    ) : isPlatformConnected && activeContactList === 'telegram' ? (
                       <div className="flex-1 h-full rounded-lg">
                         <TelegramChatView
                           selectedContact={selectedContact}
@@ -1428,7 +1482,7 @@ export default function Page() {
                           onClose={handleChatClose}
                         />
                       </div>
-                    ) : activeContactList === 'instagram' ? (
+                    ) : isPlatformConnected && activeContactList === 'instagram' ? (
                       <div className="flex-1 h-full rounded-lg">
                         <InstagramChatView
                           contact={selectedContact}
@@ -1441,10 +1495,10 @@ export default function Page() {
                         />
                       </div>
                     ) : (
-                      // Fallback content in case no platform is active
+                      // Fallback content in case no platform is active or platform is disconnected
                       <div className="flex items-center justify-center h-full p-4 text-center">
                         <div>
-                          <p className="text-muted-foreground mb-4">No active chat selected or invalid platform.</p>
+                          <p className="text-muted-foreground mb-4">No active chat selected or platform disconnected.</p>
                           <Button variant="outline" onClick={handleChatClose}>
                             Return to contacts
                           </Button>
@@ -1483,7 +1537,7 @@ export default function Page() {
                             </div>
                           </div>
                         )}
-                        {activeContactList === 'whatsapp' && (
+                        {isPlatformConnected && activeContactList === 'whatsapp' && (
                           <div className="contact-list-container h-full">
                             <WhatsappContactList
                               onContactSelect={(contact) => {
@@ -1493,7 +1547,7 @@ export default function Page() {
                             />
                           </div>
                         )}
-                        {activeContactList === 'telegram' && (
+                        {isPlatformConnected && activeContactList === 'telegram' && (
                           <div className="contact-list-container h-full">
                             <TelegramContactList
                               onContactSelect={(contact) => {
@@ -1503,7 +1557,7 @@ export default function Page() {
                             />
                           </div>
                         )}
-                        {activeContactList === 'instagram' && (
+                        {isPlatformConnected && activeContactList === 'instagram' && (
                           <div className="contact-list-container h-full">
                             <InstagramContactList
                               onContactSelect={(contact) => {
@@ -1513,7 +1567,7 @@ export default function Page() {
                             />
                           </div>
                         )}
-                        {activeContactList === 'linkedin' && (
+                        {isPlatformConnected && activeContactList === 'linkedin' && (
                           <div className="contact-list-container h-full">
                             <LinkedinContactList
                               onContactSelect={(contact) => {
@@ -1530,7 +1584,7 @@ export default function Page() {
                     {!isMobile && selectedContact && (
                       <div className="flex-1 h-full">
                         <div className="flex-1 h-full rounded-lg">
-                          {activeContactList === 'whatsapp' && selectedContact && (
+                          {isPlatformConnected && activeContactList === 'whatsapp' && selectedContact && (
                             <div className="flex-1 h-full rounded-lg">
                               <WhatsAppChatView
                                 selectedContact={selectedContact}
@@ -1543,7 +1597,7 @@ export default function Page() {
                               />
                             </div>
                           )}
-                          {activeContactList === 'telegram' && selectedContact && (
+                          {isPlatformConnected && activeContactList === 'telegram' && selectedContact && (
                             <div className="flex-1 h-full rounded-lg">
                               <TelegramChatView
                                 selectedContact={selectedContact}
@@ -1556,7 +1610,7 @@ export default function Page() {
                               />
                             </div>
                           )}
-                          {activeContactList === 'instagram' && selectedContact && (
+                          {isPlatformConnected && activeContactList === 'instagram' && selectedContact && (
                             <div className="flex-1 h-full rounded-lg">
                               <InstagramChatView
                                 contact={selectedContact}
@@ -1569,7 +1623,7 @@ export default function Page() {
                               />
                             </div>
                           )}
-                          {activeContactList === 'linkedin' && selectedContact && (
+                          {isPlatformConnected && activeContactList === 'linkedin' && selectedContact && (
                             <div className="flex-1 h-full rounded-lg">
                               <LinkedinChatView
                                 selectedContact={selectedContact}
@@ -1622,6 +1676,10 @@ export default function Page() {
           {/* Test Notification Button - Only in development */}
           {/* {process.env.NODE_ENV === 'development' && <TestNotification />} */}
         </SidebarInset>
+        
+        {/* 🚀 CRITICAL FIX: Real-time notification processors - always active */}
+        <TelegramNotifications />
+        <LinkedinNotifications />
       </SidebarProvider>
     </>
   );

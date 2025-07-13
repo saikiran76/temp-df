@@ -217,9 +217,9 @@ const TelegramBridgeSetup = ({ onComplete, onCancel, relogin = false }: Telegram
       logger.info('[telegramBridgeSetup] Starting QR code timer');
       
       // Create a ref to track current time
-      const timeLeftRef = { current: 20 }; // Changed from 60 to 35 seconds
+      const timeLeftRef = { current: 10 }; // Changed from 20 to 10 seconds
       
-      // Start with 35 seconds for QR code validity
+      // Start with 10 seconds for QR code validity
       dispatch(setTelegramTimeLeft(timeLeftRef.current));
       
       const interval = setInterval(() => {
@@ -907,7 +907,7 @@ const TelegramBridgeSetup = ({ onComplete, onCancel, relogin = false }: Telegram
             <div className="w-full bg-gray-700 rounded-full h-2.5 mb-4 overflow-hidden">
               <div 
                 className={`h-2.5 rounded-full ${timeLeft <= 10 ? 'bg-red-600 animate-pulse' : 'bg-blue-600'}`} 
-                style={{width: `${(timeLeft / 35) * 100}%`, transition: 'width 1s linear'}}
+                style={{width: `${(timeLeft / 10) * 100}%`, transition: 'width 1s linear'}}
               ></div>
             </div>
           )}
