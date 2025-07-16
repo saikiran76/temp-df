@@ -18,7 +18,7 @@ import bgEight from '@/theme/backgrounds/bg-eight.jpg';
 import bgNine from '@/theme/backgrounds/bg-nine.jpg';
 
 // Define a type for the platform
-type Platform = 'telegram' | 'whatsapp';
+type Platform = 'telegram' | 'whatsapp' | 'linkedin' | 'instagram';
 
 // Array of default backgrounds
 const defaultBackgrounds = [
@@ -186,7 +186,10 @@ const ChatBackgroundSettings: React.FC<ChatBackgroundSettingsProps> = ({ isOpen,
   // Handle save button
   const handleSave = () => {
     setChatBackground(platform, selectedBackground);
-    toast.success(`${platform === 'telegram' ? 'Telegram' : 'WhatsApp'} chat background updated!`);
+    const platformName = platform === 'telegram' ? 'Telegram' : 
+                         platform === 'whatsapp' ? 'WhatsApp' : 
+                         platform === 'linkedin' ? 'LinkedIn' : 'Instagram';
+    toast.success(`${platformName} chat background updated!`);
     onClose();
   };
 
@@ -253,16 +256,18 @@ const ChatBackgroundSettings: React.FC<ChatBackgroundSettingsProps> = ({ isOpen,
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="sm:max-w-[800px] bg-neutral-800 text-white">
-        <DialogHeader>
+        <DialogHeader className="">
           <DialogTitle className="text-xl">
-            {platform === 'telegram' ? 'Telegram' : 'WhatsApp'} Chat Background
+            {platform === 'telegram' ? 'Telegram' : 
+             platform === 'whatsapp' ? 'WhatsApp' : 
+             platform === 'linkedin' ? 'LinkedIn' : 'Instagram'} Chat Background
           </DialogTitle>
         </DialogHeader>
         
-        <Tabs defaultValue="default" value={activeTab} onValueChange={setActiveTab}>
+        <Tabs defaultValue="default" value={activeTab} onValueChange={setActiveTab} className="">
           <TabsList className="grid grid-cols-2 mb-4">
-            <TabsTrigger value="default">Default Backgrounds</TabsTrigger>
-            <TabsTrigger value="custom">Custom Backgrounds</TabsTrigger>
+            <TabsTrigger value="default" className="">Default Backgrounds</TabsTrigger>
+            <TabsTrigger value="custom" className="">Custom Backgrounds</TabsTrigger>
           </TabsList>
           
           {/* Default backgrounds tab */}

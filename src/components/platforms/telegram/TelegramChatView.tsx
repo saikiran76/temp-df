@@ -14,13 +14,15 @@ import { initializeSocket } from '@/utils/socket';
 import LavaLamp from '@/components/ui/Loader/LavaLamp';
 import MessageItem from '@/components/platforms/telegram/MessageItem';
 import { messageService } from '@/services/messageService';
-import { priorityService, type Priority } from '@/services/priorityService';
-import PriorityBadge from '@/components/ui/PriorityBadge';
 import {
   fetchMessages,
   sendMessage,
   markMessagesAsRead,
-  clearMessages,
+  clearMessagesForContact, // 🚀 NEW: Contact-specific clearing
+  setCurrentContact, // 🚀 NEW: Track current contact
+  addOptimisticMessage, // 🚀 NEW: Optimistic updates
+  confirmOptimisticMessage, // 🚀 NEW: Confirm optimistic updates
+  revertOptimisticMessage, // 🚀 NEW: Revert failed optimistic updates
   addToMessageQueue,
   updateMessageStatus,
   selectMessages,
@@ -35,13 +37,17 @@ import {
   selectLastKnownMessageId,
   selectNewMessagesError,
   refreshMessages,
-  selectRefreshing
+  selectRefreshing,
+  selectHasCachedMessages, // 🚀 NEW: Check if messages are cached
+  selectCacheFreshness, // 🚀 NEW: Check cache freshness
+  selectCachedMessageCount // 🚀 NEW: Get cached message count
 } from '@/store/slices/messageSlice';
 import { updateContactMembership, updateContactPriority } from '@/store/slices/contactSlice';
 import { WiCloudRefresh } from "react-icons/wi";
 import { RiAiGenerate } from "react-icons/ri";
 import { IoArrowBack } from "react-icons/io5";
 import { BotMessageSquare } from "lucide-react";
+// import WhatsappChatbot from '@/components/AI/WhatsappChatbot';
 import { motion } from 'framer-motion';
 import ContactAvatar from './ContactAvatar';
 import { Card, CardContent, CardHeader, CardTitle, CardFooter, CardDescription } from "@/components/ui/card";
@@ -53,15 +59,45 @@ import { Progress } from "@/components/ui/progress";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import ErrorMessage from '@/components/ui/ErrorMessage';
-import { Image } from "lucide-react";
+import { Images } from "lucide-react";
 import ChatBackgroundSettings, { getChatBackground } from '@/components/ui/ChatBackgroundSettings';
 import { Badge } from "@/components/ui/badge";
+import type { RootState, AppDispatch } from '@/store/store';
 // import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 // import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-// import TelegramInfoPanel from './TelegramInfoPanel';
-
+// import WhatsAppInfoPanel from './WhatsappInfoPanel';
 // Import environment variables
 const API_URL = import.meta.env.VITE_API_URL;
+
+// 🚀 ENHANCED: Add proper TypeScript interfaces
+interface Contact {
+  id: string;
+  display_name: string;
+  membership?: string;
+  metadata?: {
+    priority?: 'low' | 'medium' | 'high';
+  };
+}
+
+interface Message {
+  id: string;
+  message_id?: string;
+  content: string;
+  sender_id: string;
+  timestamp: string;
+  status?: string;
+  type?: string;
+  isOptimistic?: boolean;
+}
+
+interface SyncState {
+  state: string;
+  progress: number;
+  details: string;
+  processedMessages: number;
+  totalMessages: number;
+  errors?: Array<{ message: string; timestamp: number }>;
+}
 
 const ERROR_MESSAGES = {
   NETWORK_ERROR: 'Connection lost. Retrying...',
@@ -86,7 +122,7 @@ const SYNC_STATUS_MESSAGES = {
   [SYNC_STATES.REJECTED]: 'Sync request rejected'
 };
 
-const INITIAL_SYNC_STATE = {
+const INITIAL_SYNC_STATE: SyncState = {
   state: SYNC_STATES.PENDING,
   progress: 0,
   details: SYNC_STATUS_MESSAGES[SYNC_STATES.PENDING],
@@ -97,7 +133,7 @@ const INITIAL_SYNC_STATE = {
 
 // Array of fun facts for the loading state
 const SOCIAL_MEDIA_FUN_FACTS = [
-  "telegram processes over 65 billion messages daily.",
+  "WhatsApp processes over 65 billion messages daily.",
   "The average person spends over 2 hours on social media every day.",
   "Facebook was originally called 'TheFacebook' when it launched in 2004.",
   "Instagram was purchased by Facebook for $1 billion in 2012.",
@@ -105,7 +141,7 @@ const SOCIAL_MEDIA_FUN_FACTS = [
   "The first YouTube video was uploaded on April 23, 2005, titled 'Me at the zoo'.",
   "LinkedIn was founded in 2002, making it one of the oldest social networks.",
   "Over 500 hours of video are uploaded to YouTube every minute.",
-  "telegram was acquired by Facebook for $19 billion in 2014.",
+  "WhatsApp was acquired by Facebook for $19 billion in 2014.",
   "TikTok reached 1 billion users faster than any other platform.",
   "The average time spent reading a tweet is just 1.5 seconds.",
   "Instagram's most-liked photo was of an egg, with over 55 million likes.",
@@ -126,29 +162,102 @@ const spinVariants = {
   }
 };
 
-const handleSyncError = (error, contactId) => {
-  const errorMessage = error?.response?.data?.message || error?.message || 'An unknown error occurred';
+// Priority Badge component
+const PriorityBadge = ({ priority, onClick }: { priority: string; onClick: () => void }) => {
+  if (!priority) return null;
+  
+  const getVariantAndClass = () => {
+    switch (priority) {
+      case 'high':
+        return { variant: 'destructive', className: 'bg-red-500 text-white rounded' };
+      case 'medium':
+        return { variant: 'default', className: 'bg-yellow-500 bg-opacity-70 text-black rounded' };
+      case 'low':
+        return { variant: 'default', className: 'bg-green-600 text-white/80 rounded-lg' };
+      default:
+        return { variant: 'outline', className: 'bg-gray-400 bg-opacity-70 text-white rounded' };
+    }
+  };
+  
+  const { variant, className } = getVariantAndClass();
+  const label = priority.charAt(0).toUpperCase() + priority.slice(1);
+  
+  return (
+    <Badge 
+      variant={variant as any}
+      className={`text-xs font-medium py-0.5 px-2 rounded cursor-pointer ${className} hover:opacity-80`}
+      onClick={onClick}
+    >
+      {label} Priority
+    </Badge>
+  );
+};
 
-  setSyncState(prev => ({
-    ...prev,
-    state: SYNC_STATES.REJECTED,
-    errors: [...prev.errors, {
-      message: errorMessage,
-      timestamp: Date.now()
-    }]
-  }));
+const ConnectionStatusIndicator = ({ syncState, loadingState }: { syncState: SyncState; loadingState: string }) => {
+  const getStatusColor = () => {
+    if (syncState.state === SYNC_STATES.REJECTED) {
+        return 'bg-red-500';
+    } else if (syncState.state === SYNC_STATES.APPROVED) {
+      return 'bg-green-500';
+    } else {
+        return 'bg-yellow-500';
+    }
+  };
 
-  setError(`Message sync failed: ${errorMessage}`);
+  // Hide the indicator if loading is complete or sync is complete
+  if (loadingState === LOADING_STATES.COMPLETE ||
+      (syncState.state === SYNC_STATES.APPROVED && syncState.progress === 100)) {
+    return null;
+  }
 
-  console.error('[ChatView] Sync error:', {
-    contactId,
-    error: errorMessage,
-    timestamp: new Date().toISOString()
-  });
+  // Show appropriate connection status message
+  const getMessage = () => {
+    switch (loadingState) {
+      case LOADING_STATES.CONNECTING:
+        return 'Connecting...';
+      case LOADING_STATES.FETCHING:
+        return 'Loading messages...';
+      case LOADING_STATES.ERROR:
+        return 'Connection failed';
+      default:
+        return syncState.details || 'Connecting...';
+    }
+  };
+
+  // Only show message count for actual sync progress, not for connection status
+  const shouldShowProgress = syncState.state === SYNC_STATES.APPROVED && 
+                           syncState.processedMessages > 0 && 
+                           syncState.totalMessages > 0;
+
+  return (
+    <div className="absolute top-0 left-0 right-0 z-10">
+      <Card className="m-4 bg-[#24283b] border-none shadow-lg">
+        <CardContent className="p-4 space-y-2">
+          <div className="flex justify-between text-sm text-gray-400">
+            <span>{getMessage()}</span>
+            {shouldShowProgress && (
+              <span>{syncState.processedMessages} / {syncState.totalMessages}</span>
+            )}
+          </div>
+          <div className="w-full bg-gray-700 rounded-full overflow-hidden">
+            <Progress 
+              value={syncState.progress} 
+              className="h-2"
+            />
+          </div>
+          {syncState.state === SYNC_STATES.REJECTED && syncState.errors?.length > 0 && (
+            <div className="text-xs text-red-400 mt-1">
+              Unable to connect. Please check your internet connection.
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
 };
 
 // Socket error specific fallback
-const SocketErrorFallback = ({ onRetry }) => {
+const SocketErrorFallback = ({ onRetry }: { onRetry: () => void }) => {
   return (
     <div className="flex flex-col items-center justify-center h-full p-4 text-center">
       <Card className="max-w-md w-full bg-neutral-800 border-neutral-700">
@@ -161,9 +270,9 @@ const SocketErrorFallback = ({ onRetry }) => {
             Unable to connect to the chat server
           </CardDescription>
         </CardHeader>
-        <CardContent>
-          {/* <ErrorMessage message="Check your internet connection and try again." /> */}
-        </CardContent>
+        {/* <CardContent>
+          <ErrorMessage message="Socket connection error. This could be due to network issues or server maintenance. Check your internet connection and try again." />
+        </CardContent> */}
         <CardFooter className="flex flex-col space-y-2">
           <Button 
             onClick={onRetry} 
@@ -185,7 +294,7 @@ const SocketErrorFallback = ({ onRetry }) => {
   );
 };
 
-const ErrorFallback = ({ error }) => {
+const ErrorFallback = ({ error }: { error: Error }) => {
   return (
     <div className="flex flex-col items-center justify-center h-full p-4">
       <Card className="max-w-md w-full bg-neutral-800 border-neutral-700">
@@ -216,7 +325,8 @@ const ErrorFallback = ({ error }) => {
 const CONNECTION_STATUS = {
   CONNECTED: 'connected',
   DISCONNECTED: 'disconnected',
-  CONNECTING: 'connecting'
+  CONNECTING: 'connecting',
+  ERROR: 'error'
 };
 
 // Add new loading state constant
@@ -229,9 +339,23 @@ const LOADING_STATES = {
   ERROR: 'error'
 };
 
-const LoadingChatView = ({ details }) => {
+const LoadingChatView = ({ details }: { details: string }) => {
   // Select a random fun fact
   const randomFact = SOCIAL_MEDIA_FUN_FACTS[Math.floor(Math.random() * SOCIAL_MEDIA_FUN_FACTS.length)];
+
+  // Transform technical details into user-friendly messages
+  const getUserFriendlyMessage = (details: string) => {
+    if (details.includes('cache') || details.includes('Cache')) {
+      return 'Loading your chat...';
+    }
+    if (details.includes('sync') || details.includes('Sync')) {
+      return 'Connecting to chat...';
+    }
+    if (details.includes('refresh') || details.includes('Refresh')) {
+      return 'Updating messages...';
+    }
+    return details || 'Loading...';
+  };
 
   return (
     <div className="flex flex-col h-full bg-chat">
@@ -260,8 +384,9 @@ const LoadingChatView = ({ details }) => {
         <Card className="max-w-md px-6 py-4 bg-neutral-800 border-neutral-700">
           <CardContent className="flex flex-col items-center p-0">
             <LavaLamp className="w-12 h-24 mb-3" />
-            <CardTitle className="text-white font-medium text-center mb-1">Connecting to chat...</CardTitle>
-            <p className="text-sm text-gray-300 mb-2">{details}</p>
+            <CardTitle className="text-white font-medium text-center mb-1">
+              {getUserFriendlyMessage(details)}
+            </CardTitle>
             <p className="text-xs text-gray-400 italic text-center mt-2 max-w-[300px]">
               {randomFact}
             </p>
@@ -272,82 +397,34 @@ const LoadingChatView = ({ details }) => {
   );
 };
 
-const SyncProgressIndicator = ({ syncState, loadingState }) => {
-  const getStatusColor = () => {
-    if (syncState.state === SYNC_STATES.REJECTED) {
-        return 'bg-red-500';
-    } else if (syncState.state === SYNC_STATES.APPROVED) {
-      return 'bg-green-500';
-    } else {
-        return 'bg-yellow-500';
-    }
-  };
-
-  // Hide the indicator if loading is complete or sync is complete
-  if (loadingState === LOADING_STATES.COMPLETE ||
-      (syncState.state === SYNC_STATES.APPROVED && syncState.progress === 100)) {
-    return null;
-  }
-
-  // Show appropriate loading message based on state
-  const getMessage = () => {
-    switch (loadingState) {
-      case LOADING_STATES.CONNECTING:
-        return 'Connecting to chat room...';
-      case LOADING_STATES.FETCHING:
-        return 'Getting your messages...';
-      default:
-        return syncState.details;
-    }
-  };
-
-  // Using Shadcn UI components now
-  return (
-    <div className="absolute top-0 left-0 right-0 z-10">
-      <Card className="m-4 bg-[#24283b] border-none shadow-lg">
-        <CardContent className="p-4 space-y-2">
-          <div className="flex justify-between text-sm text-gray-400">
-            <span>{getMessage()}</span>
-            {syncState.state === SYNC_STATES.APPROVED && (
-              <span>{syncState.processedMessages} / {syncState.totalMessages} messages</span>
-            )}
-          </div>
-          <div className="w-full bg-gray-700 rounded-full overflow-hidden">
-            <Progress 
-              value={syncState.progress} 
-              className="h-2"
-            />
-          </div>
-          {syncState.state === SYNC_STATES.REJECTED && syncState.errors?.length > 0 && (
-            <div className="text-xs text-red-400 mt-1">
-              {syncState.errors[syncState.errors.length - 1].message}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-    </div>
-  );
-};
-
-const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
-  const dispatch = useDispatch();
+const ChatView = ({ selectedContact, onContactUpdate, onClose }: { 
+  selectedContact: Contact | null; 
+  onContactUpdate: (contact: Contact) => void; 
+  onClose: () => void; 
+}) => {
+  const dispatch = useDispatch<AppDispatch>();
   const navigate = useNavigate();
-  const currentUser = useSelector((state) => state.auth.session?.user);
+  const currentUser = useSelector((state: RootState) => state.auth.session?.user);
   const { socket, isConnected } = useSocketConnection('telegram');
   const isRefreshing = useSelector(selectRefreshing);
 
-  // Redux message selectors
-  const messagesState = useSelector((state) => state.messages);
-  const messages = useSelector((state) => selectMessages(state, selectedContact?.id) || []);
-  const loading = useSelector((state) => selectMessageLoading(state) || false);
-  const error = useSelector((state) => selectMessageError(state) || null);
-  const hasMoreMessages = useSelector((state) => selectHasMoreMessages(state) || false);
-  const currentPage = useSelector((state) => selectCurrentPage(state) || 0);
-  const messageQueue = useSelector((state) => selectMessageQueue(state) || []);
-  const unreadMessageIds = useSelector((state) => selectUnreadMessageIds(state) || []);
+  // 🚀 ENHANCED: Redux message selectors with caching support
+  const messagesState = useSelector((state: RootState) => state.messages);
+  const messages = useSelector((state: RootState) => selectMessages(state, selectedContact?.id) || []);
+  const loading = useSelector((state: RootState) => selectMessageLoading(state) || false);
+  const error = useSelector((state: RootState) => selectMessageError(state) || null);
+  const hasMoreMessages = useSelector((state: RootState) => selectHasMoreMessages(state, selectedContact?.id));
+  const currentPage = useSelector((state: RootState) => selectCurrentPage(state) || 0);
+  const messageQueue = useSelector((state: RootState) => selectMessageQueue(state) || []);
+  const unreadMessageIds = useSelector((state: RootState) => selectUnreadMessageIds(state) || []);
   const isNewMessagesFetching = useSelector(selectNewMessagesFetching);
-  const lastKnownMessageId = useSelector((state) => selectLastKnownMessageId(state, selectedContact?.id));
+  const lastKnownMessageId = useSelector((state: RootState) => selectLastKnownMessageId(state, selectedContact?.id));
   const newMessagesError = useSelector(selectNewMessagesError);
+  
+  // 🚀 NEW: Cache-related selectors
+  const hasCachedMessages = useSelector((state: RootState) => selectHasCachedMessages(state, selectedContact?.id));
+  const cacheFreshness = useSelector((state: RootState) => selectCacheFreshness(state, selectedContact?.id));
+  const cachedMessageCount = useSelector((state: RootState) => selectCachedMessageCount(state, selectedContact?.id));
 
   // Local state
   const [connectionStatus, setConnectionStatus] = useState(CONNECTION_STATUS.DISCONNECTED);
@@ -359,7 +436,7 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
   });
   const [socketInitError, setSocketInitError] = useState(false);
   const [previewMedia, setPreviewMedia] = useState(null);
-  const [priority, setPriority] = useState<Priority>('medium');
+  const [priority, setPriority] = useState<string | null>(null);
   const [showSummary, setShowSummary] = useState(false);
   const [summary, setSummary] = useState(null);
   const [isSummarizing, setIsSummarizing] = useState(false);
@@ -369,30 +446,34 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
   const [isInitialized, setIsInitialized] = useState(false);
   const [socketReady, setSocketReady] = useState(false);
   const [showSummaryModal, setShowSummaryModal] = useState(false);
-  const [summaryData, setSummaryData] = useState(null);
+  const [summaryData, setSummaryData] = useState<any>(null);
   const [loadingState, setLoadingState] = useState(LOADING_STATES.IDLE);
-  const [syncState, setSyncState] = useState({
+  const [syncState, setSyncState] = useState<SyncState>({
     state: SYNC_STATES.IDLE,
     progress: 0,
     details: '',
     processedMessages: 0,
     totalMessages: 0,
-    errors: [],
+    errors: []
   });
+  const [showChatbot, setShowChatbot] = useState(false);
   const [showBackgroundSettings, setShowBackgroundSettings] = useState(false);
   const [chatBackground, setChatBackground] = useState<string>("");
+  
+  // 🚀 NEW: Developer debug overlay state
+  const [showDebugOverlay, setShowDebugOverlay] = useState(false);
 
   // Refs
-  const syncAbortController = useRef(null);
-  const lastSyncRequest = useRef(null);
-  const messagesEndRef = useRef(null);
-  const messagesContainerRef = useRef(null);
+  const syncAbortController = useRef<AbortController | null>(null);
+  const lastSyncRequest = useRef<any>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const messageCache = useRef(new Map());
   const isMounted = useRef(true);
-  const batchProcessorRef = useRef(null);
-  const offlineTimeoutRef = useRef(null);
-  const lastSyncRef = useRef(null);
-  const syncTimeoutRef = useRef(null);
+  const batchProcessorRef = useRef<any>(null);
+  const offlineTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const lastSyncRef = useRef<any>(null);
+  const syncTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Constants
   const PAGE_SIZE = 50;
@@ -424,57 +505,188 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
     return true;
   }, [socket]);
 
-  const handleMessageSend = useCallback(
-    async (content) => {
-      if (!selectedContact?.id) return;
+  // 🚀 ENHANCED: Smart message loading with proper user-facing status messages
+  const loadMessagesIntelligently = useCallback(async (contactId: string, forceRefresh = false) => {
+    if (!contactId) return;
 
-      const message = { content };
+    // 🚀 CRITICAL FIX: Prevent multiple simultaneous loads
+    if (loading && !forceRefresh) {
+      logger.info('[ChatView] Already loading, skipping duplicate request');
+      return;
+    }
 
-      if (!checkSocketAvailability() || !socketReady) {
-        dispatch(addToMessageQueue(message));
-        toast.success('Message queued for delivery');
-        return;
-      }
+    logger.info('[ChatView] 🚀 Smart message loading:', {
+      contactId,
+      hasCachedMessages,
+      cacheFreshness,
+      cachedMessageCount,
+      forceRefresh
+    });
 
-      try {
-        const result = await dispatch(sendMessage({ 
-          contactId: selectedContact.id, 
-          message, 
-          platform: 'telegram' 
-        })).unwrap();
-        
-        // 🚀 CRITICAL FIX: Dispatch event to update contact list with sent message
-        window.dispatchEvent(new CustomEvent('telegram-message-sent', {
-          detail: {
-            contactId: selectedContact.id,
-            message: content,
-            timestamp: Date.now()
-          }
-        }));
-        
-        logger.info('🎯 Dispatched sent Telegram message event for contact list update:', {
+    // 🚀 CRITICAL FIX: Only use cache if we have messages AND they are fresh
+    if (!forceRefresh && hasCachedMessages && cacheFreshness?.isFresh && messages.length > 0) {
+      logger.info('[ChatView] ✅ Using cached messages (fresh):', {
+        contactId,
+        messageCount: messages.length,
+        cacheAge: cacheFreshness.age,
+        lastFetched: new Date(cacheFreshness.lastFetched).toLocaleTimeString()
+      });
+      
+      setLoadingState(LOADING_STATES.COMPLETE);
+      setSyncState((prev) => ({
+        ...prev,
+        state: SYNC_STATES.APPROVED,
+        progress: 100,
+        details: 'Chat ready', // 🚀 FIX: User-friendly message
+        processedMessages: messages.length,
+        totalMessages: messages.length,
+      }));
+      return;
+    }
+
+    // 🚀 CRITICAL FIX: Always show fetching state when actually loading
+    logger.info('[ChatView] 📥 Loading messages from server:', { contactId });
+    setLoadingState(LOADING_STATES.FETCHING);
+    setSyncState((prev) => ({
+      ...prev,
+      state: SYNC_STATES.APPROVED,
+      progress: 50,
+      details: 'Loading messages...', // 🚀 FIX: User-friendly message
+      processedMessages: 0,
+      totalMessages: 0,
+    }));
+
+    try {
+      // 🚀 CRITICAL: Don't clear messages anymore - let Redux handle caching
+      // dispatch(clearMessages()); // REMOVED - this was the performance killer!
+      
+      // Set current contact for cache management
+      dispatch(setCurrentContact(contactId));
+
+      const result = await dispatch(
+        fetchMessages({
+          contactId: contactId,
+          page: 0,
+          limit: PAGE_SIZE,
+          platform: 'telegram'
+        })
+      ).unwrap();
+
+      setLoadingState(LOADING_STATES.COMPLETE);
+      setSyncState((prev) => ({
+        ...prev,
+        state: SYNC_STATES.APPROVED,
+        progress: 100,
+        details: 'Chat ready', // 🚀 FIX: User-friendly message
+        processedMessages: result.messages.length,
+        totalMessages: result.messages.length,
+      }));
+
+      logger.info('[ChatView] ✅ Messages loaded successfully:', {
+        contactId,
+        newMessages: result.messages.length,
+        fromCache: hasCachedMessages ? 'refreshed' : 'fresh'
+      });
+
+    } catch (error: any) {
+      logger.error('[ChatView] ❌ Failed to fetch messages:', {
+        contactId,
+        error: error.message,
+      });
+      setLoadingState(LOADING_STATES.ERROR);
+      setSyncState((prev) => ({
+        ...prev,
+        state: SYNC_STATES.REJECTED,
+        progress: 0,
+        details: 'Connection failed', // 🚀 FIX: User-friendly message
+        errors: [
+          ...(prev.errors || []),
+          {
+            message: error.message,
+            timestamp: Date.now(),
+          },
+        ],
+      }));
+      toast.error('Failed to load messages');
+    }
+  }, [dispatch, loading, messages.length]); // 🚀 CRITICAL FIX: Simplified dependencies
+
+  // 🚀 ENHANCED: Smart message sending with optimistic updates
+  const handleSendMessage = useCallback(async (message: { content: string; type?: string }) => {
+    if (!selectedContact?.id || !message?.content?.trim()) return;
+
+    const tempId = `optimistic_${Date.now()}`;
+    
+    try {
+      // 🚀 Add optimistic message immediately
+      dispatch(addOptimisticMessage({
+        contactId: selectedContact.id,
+        message: {
+          content: message.content,
+          sender_id: currentUser?.id,
+          type: 'text'
+        }
+      }));
+
+      logger.info('[ChatView] 📤 Sending message with optimistic update:', {
+        contactId: selectedContact.id,
+        tempId,
+        content: message.content.substring(0, 50)
+      });
+
+      const result = await dispatch(sendMessage({ 
+        contactId: selectedContact.id, 
+        message, 
+        platform: 'telegram' 
+      })).unwrap();
+      
+      // 🚀 Confirm optimistic message with server response
+      dispatch(confirmOptimisticMessage({
+        contactId: selectedContact.id,
+        tempId,
+        serverMessage: {
+          ...message,
+          id: result.messageId,
+          status: 'sent',
+          timestamp: new Date().toISOString()
+        }
+      }));
+
+      // 🚀 CRITICAL FIX: Dispatch event to update contact list with sent message
+      window.dispatchEvent(new CustomEvent('telegram-message-sent', {
+        detail: {
           contactId: selectedContact.id,
-          message: content
-        });
-        
-        scrollToBottom();
-      } catch (error) {
-        logger.error('[ChatView] Error sending message:', error);
-        dispatch(addToMessageQueue(message));
-        toast.error('Failed to send message, queued for retry');
-      }
-    },
-    [dispatch, selectedContact?.id, socketReady, scrollToBottom, checkSocketAvailability]
-  );
+          message: message.content,
+          timestamp: new Date().toISOString()
+        }
+      }));
+
+      scrollToBottom();
+      
+      logger.info('[ChatView] ✅ Message sent successfully:', {
+        contactId: selectedContact.id,
+        messageId: result.messageId
+      });
+
+    } catch (error: any) {
+      // 🚀 Revert optimistic message on failure
+      dispatch(revertOptimisticMessage({
+        contactId: selectedContact.id,
+        tempId
+      }));
+      
+      logger.error('[ChatView] ❌ Failed to send message:', {
+        contactId: selectedContact.id,
+        error: error.message
+      });
+      toast.error('Failed to send message');
+    }
+  }, [dispatch, selectedContact?.id, currentUser?.id, scrollToBottom]);
 
   const handleMarkAsRead = useCallback(
-    debounce((messageIds) => {
+    debounce((messageIds: string[]) => {
       if (!selectedContact?.id || messageIds.length === 0 || !isMounted.current) return;
-      dispatch(markMessagesAsRead({ 
-        contactId: selectedContact.id, 
-        messageIds,
-        platform: 'telegram'
-      }));
+      dispatch(markMessagesAsRead({ contactId: selectedContact.id, messageIds, platform: 'telegram' }));
     }, 1000),
     [dispatch, selectedContact?.id]
   );
@@ -511,7 +723,7 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
 
       setSummaryData(response.data);
       setShowSummaryModal(true);
-    } catch (error) {
+    } catch (error: any) {
       logger.error('[ChatView] Error fetching summary:', {
         error,
         contactId: selectedContact.id,
@@ -544,18 +756,13 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
         })
       ).unwrap();
 
-      if (result?.warning) {
-        toast.warn(result.warning);
-        return;
-      }
-
       if (result?.messages?.length > 0) {
         scrollToBottom();
         toast.success(`${result.messages.length} new message(s) received`);
       } else {
-        toast.info('No new messages');
+        toast('No new messages');
       }
-    } catch (error) {
+    } catch (error: any) {
       logger.error('[ChatView] Error fetching new messages:', error);
       toast.error(error.message || 'Failed to fetch new messages');
     }
@@ -565,10 +772,7 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
     if (!selectedContact?.id || isRefreshing) return;
 
     try {
-      await dispatch(refreshMessages({ 
-        contactId: selectedContact.id,
-        platform: 'telegram'
-      })).unwrap();
+      await dispatch(refreshMessages({ contactId: selectedContact.id, platform: 'telegram' })).unwrap();
       toast.success('Messages refreshed successfully');
     } catch (error) {
       toast.error('Unable to refresh messages');
@@ -582,8 +786,30 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
     };
   }, []);
 
+  // 🚀 CRITICAL FIX: Only load messages when actually needed (not when cached)
   useEffect(() => {
     if (!selectedContact?.id) return;
+
+    // 🚀 CRITICAL FIX: Check if we already have fresh cached messages
+    if (hasCachedMessages && cacheFreshness?.isFresh && messages.length > 0) {
+      logger.info('[ChatView] ✅ Using existing cached messages, skipping load:', {
+        contactId: selectedContact.id,
+        messageCount: messages.length,
+        cacheAge: cacheFreshness.age
+      });
+      
+      // Set to complete state immediately since we have cached messages
+      setLoadingState(LOADING_STATES.COMPLETE);
+      setSyncState((prev) => ({
+        ...prev,
+        state: SYNC_STATES.APPROVED,
+        progress: 100,
+        details: 'Chat ready',
+        processedMessages: messages.length,
+        totalMessages: messages.length,
+      }));
+      return;
+    }
 
     if (selectedContact?.membership === 'join') {
       setLoadingState(LOADING_STATES.CONNECTING);
@@ -613,162 +839,26 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
             contactId: selectedContact.id,
             error: error.message,
           });
-          toast.warn('Real-time updates may be delayed but you can use the "new messages" button for new updates');
+          toast('Real-time updates may be delayed but you can use the "new messages" button for new updates');
         })
         .finally(() => {
-          // Always proceed to fetch messages regardless of listener setup result
-          logger.info('[ChatView] Transitioning to FETCHING state to load messages');
-          setLoadingState(LOADING_STATES.FETCHING);
-          setSyncState((prev) => ({
-            ...prev,
-            state: SYNC_STATES.APPROVED,
-            progress: 50,
-            details: 'Getting your messages...',
-            processedMessages: 0,
-            totalMessages: 0,
-          }));
-
-          dispatch(clearMessages());
-
-          dispatch(
-            fetchMessages({
-              contactId: selectedContact.id,
-              page: 0,
-              limit: PAGE_SIZE,
-              platform: 'telegram'
-            })
-          )
-            .unwrap()
-            .then((result) => {
-              logger.info('[ChatView] Messages fetched successfully:', {
-                count: result.messages?.length,
-                hasMore: result.hasMore
-              });
-              setLoadingState(LOADING_STATES.COMPLETE);
-              setSyncState((prev) => ({
-                ...prev,
-                state: SYNC_STATES.APPROVED,
-                progress: 100,
-                details: 'Messages loaded successfully',
-                processedMessages: result.messages.length,
-                totalMessages: result.messages.length,
-              }));
-            })
-            .catch((error) => {
-              logger.error('[ChatView] Failed to fetch messages:', {
-                contactId: selectedContact.id,
-                error: error.message,
-              });
-              
-              // Handle contact removal due to room not found
-              if (error.code === 'CONTACT_REMOVED') {
-                logger.info('[ChatView] Contact was auto-deleted, navigating back to dashboard');
-                setLoadingState(LOADING_STATES.ERROR);
-                setSyncState((prev) => ({
-                  ...prev,
-                  state: SYNC_STATES.REJECTED,
-                  progress: 0,
-                  details: 'Contact no longer accessible',
-                  errors: [
-                    ...(prev.errors || []),
-                    {
-                      message: 'Contact has been removed as it is no longer accessible',
-                      timestamp: Date.now(),
-                    },
-                  ],
-                }));
-                
-                // Show a more user-friendly message
-                toast.error('This contact is no longer accessible and has been removed', {
-                  duration: 5000,
-                  style: {
-                    background: '#EF4444',
-                    color: '#ffffff',
-                    border: 'none',
-                    borderRadius: '8px',
-                    boxShadow: '0 4px 12px rgba(239, 68, 68, 0.15)',
-                  },
-                });
-                
-                // Navigate back to dashboard after a short delay
-                setTimeout(() => {
-                  if (typeof onClose === 'function') {
-                    onClose();
-                  } else {
-                    navigate('/dashboard');
-                  }
-                }, 2000);
-                
-                return;
-              }
-              
-              setLoadingState(LOADING_STATES.ERROR);
-              setSyncState((prev) => ({
-                ...prev,
-                state: SYNC_STATES.REJECTED,
-                progress: 0,
-                details: 'Failed to load messages',
-                errors: [
-                  ...(prev.errors || []),
-                  {
-                    message: error.message,
-                    timestamp: Date.now(),
-                  },
-                ],
-              }));
-              toast.error('Failed to load messages');
-            });
+          // 🚀 CRITICAL ENHANCEMENT: Use smart loading instead of aggressive clearing
+          loadMessagesIntelligently(selectedContact.id);
         });
-    } else if (selectedContact?.membership !== 'join') {
-      // If the membership isn't 'join', show an appropriate message
-      logger.info('[ChatView] Contact does not have join membership:', {
-        contactId: selectedContact.id,
-        membership: selectedContact.membership
-      });
-      
-      setLoadingState(LOADING_STATES.ERROR);
-      setSyncState((prev) => ({
-        ...prev,
-        state: SYNC_STATES.REJECTED,
-        progress: 0,
-        details: `Cannot load messages: ${selectedContact.membership} status`,
-      }));
-      
-      toast.error(`Cannot load messages for ${selectedContact.membership} status`);
     }
-  }, [dispatch, selectedContact?.id, selectedContact?.membership]);
-
-  useEffect(() => {
-    if (selectedContact?.id) {
-      setLoadingState(LOADING_STATES.CONNECTING);
-      setSyncState((prev) => ({
-        ...prev,
-        state: SYNC_STATES.PENDING,
-        progress: 0,
-        details: 'Initializing chat...',
-        processedMessages: 0,
-        totalMessages: 0,
-      }));
-    } else {
-      setLoadingState(LOADING_STATES.IDLE);
-      setSyncState((prev) => ({
-        ...prev,
-        state: SYNC_STATES.IDLE,
-      }));
-    }
-  }, [selectedContact?.id]);
+  }, [dispatch, selectedContact?.id, selectedContact?.membership, loadMessagesIntelligently, hasCachedMessages, cacheFreshness, messages.length]);
 
   useEffect(() => {
     if (!socket || !selectedContact?.id) return;
 
-    const handleContactUpdate = (data) => {
+    const handleContactUpdate = (data: any) => {
       if (data.contactId === selectedContact.id) {
         logger.info('[ChatView] Received contact update:', data);
         onContactUpdate(data.contact);
       }
     };
 
-    const handleMembershipUpdate = (data) => {
+    const handleMembershipUpdate = (data: any) => {
       if (data.contactId === selectedContact.id) {
         logger.info('[ChatView] Received membership update:', data);
         onContactUpdate({
@@ -785,7 +875,7 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
       socket.off('telegram:contact:update', handleContactUpdate);
       socket.off('telegram:membership:update', handleMembershipUpdate);
     };
-  }, [socket, selectedContact?.id, onContactUpdate]);
+  }, [socket, selectedContact?.id, onContactUpdate, selectedContact]);
 
   useEffect(() => {
     if (!socket || !selectedContact?.id || !currentUser?.id) {
@@ -809,13 +899,16 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
 
     const processedMessageIds = new Set();
 
-    const handleNewMessage = (payload, ack) => {
+    const handleNewMessage = (payload: any, ack?: Function) => {
       // Log message receipt
       logger.info('[ChatView] New message received via socket:', {
         hasAck: !!ack,
         contactId: payload?.contactId,
-        messageId: payload?.message?.message_id || 'unknown',
-        timestamp: payload?.message?.timestamp
+        messageId: payload?.message?.message_id || payload?.messageId || 'unknown',
+        timestamp: payload?.message?.timestamp || payload?.timestamp,
+        eventType: payload.message ? 'traditional' : 'enhanced',
+        isOwnMessage: payload?.isOwnMessage,
+        isOutgoing: payload?.isOutgoing
       });
 
       // Always acknowledge receipt, even if we don't process the message
@@ -834,38 +927,81 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
       }
 
       // Process the message if it's for the selected contact
-      if (payload && payload.contactId === selectedContact?.id && payload.message) {
-        const messageId = payload.message.message_id || payload.message.id;
+      if (payload && payload.contactId === selectedContact?.id) {
+        // Handle enhanced event listener format (telegram:message_received)
+        if (payload.message && typeof payload.message === 'string') {
+          // 🚀 CRITICAL FIX: Enhanced format with proper isOutgoing detection
+          // Enhanced format: {contactId, message: string, sender, timestamp, roomId, isOwnMessage, isOutgoing}
+          const messageData = {
+            id: `received_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            message_id: `received_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            content: payload.message,
+            timestamp: payload.timestamp || new Date().toISOString(),
+            sender_id: payload.sender || 'unknown',
+            sender_name: payload.sender || 'Unknown',
+            message_type: 'text',
+            // 🔥 CRITICAL FIX: Use isOutgoing flag from Enhanced Event Listener
+            is_outgoing: payload.isOutgoing || payload.isOwnMessage || false,
+            isOwnMessage: payload.isOwnMessage || payload.isOutgoing || false
+          };
 
-        if (messageId && !processedMessageIds.has(messageId)) {
-          // Normalize the message format
-          const normalized = messageService.normalizeMessage(payload.message);
-          processedMessageIds.add(normalized.id);
+          if (!processedMessageIds.has(messageData.id)) {
+            processedMessageIds.add(messageData.id);
 
-          logger.info('[ChatView] Processing new message:', {
-            messageId: messageId,
-            content: payload.message.content,
-            timestamp: payload.message.timestamp,
-          });
+            logger.info('[ChatView] Processing enhanced message format:', {
+              messageId: messageData.id,
+              content: messageData.content,
+              timestamp: messageData.timestamp,
+              isOwnMessage: messageData.isOwnMessage,
+              isOutgoing: messageData.is_outgoing,
+              messageDirection: messageData.is_outgoing ? 'OUTGOING' : 'INCOMING'
+            });
 
-          dispatch({
-            type: 'messages/messageReceived',
-            payload: {
-              contactId: selectedContact.id,
-              message: normalized || payload.message,
-            },
-          });
-          scrollToBottom();
-        } else {
-          logger.info('[ChatView] Skipping duplicate message:', {
-            messageId,
-            timestamp: payload.message.timestamp,
-          });
+            dispatch({
+              type: 'messages/messageReceived',
+              payload: {
+                contactId: selectedContact.id,
+                message: messageData,
+              },
+            });
+            scrollToBottom();
+          }
+        }
+        // Handle traditional format (telegram:message)
+        else if (payload.message && typeof payload.message === 'object') {
+          // Traditional format: {contactId, message: object}
+          const messageData = {
+            ...payload.message,
+            // 🔥 CRITICAL FIX: Determine outgoing status for traditional format
+            is_outgoing: payload.message.is_outgoing || 
+                        payload.message.sender_id === currentUser?.id ||
+                        false
+          };
+
+          if (!processedMessageIds.has(messageData.id || messageData.message_id)) {
+            processedMessageIds.add(messageData.id || messageData.message_id);
+
+            logger.info('[ChatView] Processing traditional message format:', {
+              messageId: messageData.id || messageData.message_id,
+              content: messageData.content,
+              isOutgoing: messageData.is_outgoing,
+              messageDirection: messageData.is_outgoing ? 'OUTGOING' : 'INCOMING'
+            });
+
+            dispatch({
+              type: 'messages/messageReceived',
+              payload: {
+                contactId: selectedContact.id,
+                message: messageData,
+              },
+            });
+            scrollToBottom();
+          }
         }
       }
     };
 
-    const handleMessageUpdate = (updatedMessage) => {
+    const handleMessageUpdate = (updatedMessage: any) => {
       if (updatedMessage.contactId === selectedContact.id) {
         logger.info('[ChatView] Message updated:', updatedMessage);
         dispatch(
@@ -883,19 +1019,24 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
     const userRoom = `user:${currentUser.id}`;
     socket.emit('join:room', userRoom);
 
+    // 🚀 CRITICAL FIX: Clean up all event listeners before setting new ones
     socket.off('telegram:message');
+    socket.off('telegram:message_received'); // 🚀 NEW: Enhanced event listener events
     socket.off('telegram:message:update');
     socket.off('room:joined');
     socket.off('room:error');
 
-    socket.on('telegram:message', handleNewMessage);
+    // 🚀 CRITICAL FIX: Listen for both traditional and enhanced events
+    socket.on('telegram:message', handleNewMessage); // Traditional events (if any)
+    socket.on('telegram:message_received', handleNewMessage); // 🚀 NEW: Enhanced event listener events
     socket.on('telegram:message:update', handleMessageUpdate);
 
     return () => {
       socket.off('telegram:message', handleNewMessage);
+      socket.off('telegram:message_received', handleNewMessage); // 🚀 NEW: Clean up enhanced events
       socket.off('telegram:message:update', handleMessageUpdate);
     };
-  }, [socket, selectedContact?.id, dispatch, currentPage, scrollToBottom]);
+  }, [socket, selectedContact?.id, dispatch, currentPage, scrollToBottom, currentUser?.id]);
 
   useEffect(() => {
     if (!socket) {
@@ -923,7 +1064,7 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
               setConnectionStatus(CONNECTION_STATUS.DISCONNECTED);
               setSocketReady(false);
             },
-            onError: (error) => {
+            onError: (error: any) => {
               logger.error('[ChatView] Socket error via manual initialization:', error);
               setConnectionStatus(CONNECTION_STATUS.ERROR);
               setSocketReady(false);
@@ -960,13 +1101,13 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
       if (currentUser?.id) {
         const userRoom = `user:${currentUser.id}`;
         logger.info(`[ChatView] Joining room ${userRoom}`);
-        socket.emit('join:room', userRoom, (response) => {
+        socket.emit('join:room', userRoom, (response: any) => {
           logger.info(`[ChatView] Room join response:`, response);
         });
       }
     };
 
-    const handleDisconnect = (reason) => {
+    const handleDisconnect = (reason: string) => {
       logger.info('[ChatView] Socket disconnected:', reason);
       setConnectionStatus(CONNECTION_STATUS.DISCONNECTED);
       setSocketReady(false);
@@ -984,7 +1125,7 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
       setSocketReady(false);
     };
 
-    const handleError = (error) => {
+    const handleError = (error: any) => {
       logger.error('[ChatView] Socket error:', error);
       setSocketReady(false);
 
@@ -1034,7 +1175,7 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
       socket.off('error', handleError);
       clearInterval(healthCheckInterval);
     };
-  }, [socket, currentUser?.id]);
+  }, [socket, currentUser?.id, connectionStatus]);
 
   useEffect(() => {
     if (loadingState === LOADING_STATES.FETCHING) {
@@ -1059,66 +1200,39 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
         state: SYNC_STATES.REJECTED,
         details: error || 'Failed to load messages',
         errors: [
-          ...prev.errors,
+          ...(prev.errors || []),
           { message: error || 'Failed to load messages', timestamp: Date.now() },
         ],
       }));
     }
   }, [loadingState, messages.length, error]);
 
-  // Load priority from priorityService when contact changes
   useEffect(() => {
-    if (selectedContact?.id) {
-      const contactPriority = priorityService.getPriority(selectedContact.id);
-      setPriority(contactPriority);
+    if (selectedContact) {
+      setPriority(selectedContact.metadata?.priority || 'medium');
     }
-  }, [selectedContact?.id]);
+  }, [selectedContact]);
 
-  // Listen for priority changes from other components
-  useEffect(() => {
-    const handlePriorityChange = (event: CustomEvent) => {
-      const { contactId, priority: newPriority } = event.detail;
-      if (contactId === String(selectedContact?.id)) {
-        setPriority(newPriority);
-      }
-    };
+  const handlePriorityChange = (priority: 'low' | 'medium' | 'high') => {
+    if (!selectedContact) return;
 
-    window.addEventListener('priority-changed', handlePriorityChange as EventListener);
-    return () => {
-      window.removeEventListener('priority-changed', handlePriorityChange as EventListener);
-    };
-  }, [selectedContact?.id]);
+    setPriority(priority);
 
-  const handlePriorityChange = (newPriority: Priority) => {
-    if (!selectedContact?.id) return;
-
-    setPriority(newPriority);
-    
-    // Save to priorityService (which handles localStorage)
-    priorityService.setPriority(selectedContact.id, newPriority);
-
-    // Update Redux state
     dispatch(updateContactPriority({
       contactId: selectedContact.id,
-      priority: newPriority,
+      priority,
     }));
 
-    // Update parent component
     if (typeof onContactUpdate === 'function') {
-      const updatedContact = {
+      const updatedContact: Contact = {
         ...selectedContact,
         metadata: {
           ...selectedContact.metadata,
-          priority: newPriority,
+          priority,
         },
       };
       onContactUpdate(updatedContact);
     }
-
-    logger.info('[Telegram ChatView] Priority changed:', {
-      contactId: selectedContact.id,
-      priority: newPriority
-    });
   };
 
   const renderConnectionStatus = useCallback(() => {
@@ -1135,49 +1249,62 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
   }, [connectionStatus]);
 
   const renderMessages = useCallback(() => {
-    if (loadingState === LOADING_STATES.INITIAL || loadingState === LOADING_STATES.CONNECTING) {
+    // 🚀 CRITICAL FIX: Show loading only when actually loading, not when we have messages
+    if ((loadingState === LOADING_STATES.INITIAL || loadingState === LOADING_STATES.CONNECTING) && messages.length === 0) {
       return (
         <div className="flex flex-col items-center justify-center h-full">
           <LoadingChatView details={syncState.details} />
-          <p className="mt-2 text-muted-foreground">
-            {loadingState === LOADING_STATES.INITIAL ? 'Preparing chat...' : 'Connecting to chat...'}
-          </p>
         </div>
       );
     }
 
-    if (loadingState === LOADING_STATES.FETCHING) {
+    if (loadingState === LOADING_STATES.FETCHING && messages.length === 0) {
       return (
         <div className="flex flex-col items-center justify-center h-full">
           <LoadingChatView details={syncState.details} />
-          <p className="mt-2 text-muted-foreground">Getting your messages...</p>
         </div>
       );
     }
 
-    if (loadingState === LOADING_STATES.ERROR) {
+    if (loadingState === LOADING_STATES.ERROR && messages.length === 0) {
       return (
         <div className="flex flex-col items-center justify-center h-full">
-          {/* <ErrorMessage message={error || 'Failed to load messages'} /> */}
-          <Alert>{error || 'Failed to load Messages'}</Alert>
+          <div className="text-center p-4">
+            <div className="text-red-500 mb-2">Unable to connect</div>
+            <div className="text-sm text-muted-foreground">
+              Please check your internet connection and try again
+            </div>
+          </div>
         </div>
       );
     }
 
-    if (!messages.length) {
-      return <div className="text-muted-foreground text-center">No messages yet</div>;
+    // 🚀 CRITICAL FIX: Only show "No messages yet" if we're not loading AND have no messages
+    if (!messages.length && loadingState === LOADING_STATES.COMPLETE) {
+      return <div className="text-muted-foreground text-center p-4">No messages yet</div>;
     }
 
-    return messages.map((message) => (
-      <div key={`${message.id}_${message.message_id}_${message.timestamp}`} className="w-full overflow-hidden">
-        <MessageItem
-          message={message}
-          currentUser={currentUser}
-          className="mb-3 max-w-[85%]"
-        />
+    // 🚀 CRITICAL FIX: Always render messages if we have them, regardless of loading state
+    if (messages.length > 0) {
+      return (
+        <div className="space-y-2">
+          {messages.map((message: Message) => (
+            <MessageItem
+              key={`${message.id}_${message.message_id}_${message.timestamp}`}
+              message={message}
+            />
+          ))}
+        </div>
+      );
+    }
+
+    // Fallback: show loading if we don't have messages and are in any loading state
+    return (
+      <div className="flex flex-col items-center justify-center h-full">
+        <LoadingChatView details={syncState.details} />
       </div>
-    ));
-  }, [loadingState, messages, error, currentUser, syncState.details]);
+    );
+  }, [loadingState, messages, currentUser, syncState.details]);
 
   const renderAvatar = () => {
     return (
@@ -1206,7 +1333,7 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
         setConnectionStatus(CONNECTION_STATUS.DISCONNECTED);
         setSocketReady(false);
       },
-      onError: (error) => {
+      onError: (error: any) => {
         logger.error('[ChatView] Socket error via retry:', error);
         setConnectionStatus(CONNECTION_STATUS.ERROR);
         setSocketReady(false);
@@ -1227,6 +1354,18 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
     }
   }, []);
 
+  // 🚀 NEW: Toggle debug overlay with Ctrl+Shift+D
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.ctrlKey && event.shiftKey && event.key === 'D') {
+        setShowDebugOverlay(prev => !prev);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   // Listen for background changes from other components
   useEffect(() => {
     const handleBackgroundChange = (event: CustomEvent) => {
@@ -1242,6 +1381,82 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
     };
   }, []);
 
+  // 🚀 NEW: Debug overlay component
+  const DebugOverlay = () => {
+    if (!showDebugOverlay) return null;
+
+    return (
+      <div className="fixed top-4 right-4 bg-black/90 text-white p-4 rounded-lg text-xs z-50 max-w-sm">
+        <div className="flex justify-between items-center mb-2">
+          <h3 className="font-bold">Debug Info</h3>
+          <button 
+            onClick={() => setShowDebugOverlay(false)}
+            className="text-gray-400 hover:text-white"
+          >
+            ×
+          </button>
+        </div>
+        <div className="space-y-1">
+          <div><strong>Connection:</strong> {connectionStatus}</div>
+          <div><strong>Loading State:</strong> {loadingState}</div>
+          <div><strong>Socket Ready:</strong> {socketReady ? 'Yes' : 'No'}</div>
+          <div><strong>Messages:</strong> {messages.length}</div>
+          <div><strong>Has Cache:</strong> {hasCachedMessages ? 'Yes' : 'No'}</div>
+          <div><strong>Cache Fresh:</strong> {cacheFreshness?.isFresh ? 'Yes' : 'No'}</div>
+          <div><strong>Cache Age:</strong> {cacheFreshness?.age ? `${Math.round(cacheFreshness.age / 1000)}s` : 'N/A'}</div>
+          <div><strong>Queue Size:</strong> {messageQueue.length}</div>
+          <div><strong>Sync State:</strong> {syncState.state}</div>
+          <div><strong>Progress:</strong> {syncState.progress}%</div>
+        </div>
+        <div className="mt-2 text-xs text-gray-400">
+          Press Ctrl+Shift+D to toggle
+        </div>
+      </div>
+    );
+  };
+
+  // 🚀 NEW: Global connection status banner
+  const ConnectionStatusBanner = () => {
+    if (connectionStatus === CONNECTION_STATUS.CONNECTED && messageQueue.length === 0) {
+      return null;
+    }
+
+    const getBannerContent = () => {
+      if (connectionStatus === CONNECTION_STATUS.DISCONNECTED) {
+        return {
+          message: 'Connecting...',
+          color: 'bg-yellow-500',
+          icon: '🔄'
+        };
+      }
+      if (connectionStatus === CONNECTION_STATUS.ERROR) {
+        return {
+          message: 'Connection failed. Retrying...',
+          color: 'bg-red-500',
+          icon: '⚠️'
+        };
+      }
+      if (messageQueue.length > 0) {
+        return {
+          message: `${messageQueue.length} message${messageQueue.length > 1 ? 's' : ''} waiting to send`,
+          color: 'bg-blue-500',
+          icon: '📤'
+        };
+      }
+      return null;
+    };
+
+    const bannerContent = getBannerContent();
+    if (!bannerContent) return null;
+
+    return (
+      <div className={`${bannerContent.color} text-white px-4 py-2 text-sm text-center`}>
+        <span className="mr-2">{bannerContent.icon}</span>
+        {bannerContent.message}
+      </div>
+    );
+  };
+
   // Add the rendering of the header with close button
   const renderHeader = () => {
     return (
@@ -1252,15 +1467,16 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
             <h2 className="font-medium">{selectedContact?.display_name || 'Unknown'}</h2>
             <div className="flex items-center space-x-2 text-xs text-muted-foreground">
               {renderConnectionStatus()}
-              {/* Enhanced Priority Badge with proper colors */}
-              <PriorityBadge
-                priority={priority}
+              {/* Priority Badge replacing dropdown */}
+              <PriorityBadge 
+                priority={priority || selectedContact?.metadata?.priority || 'medium'} 
                 onClick={() => {
-                  const nextPriority = priorityService.getNextPriority(priority);
+                  // Cycle through priorities: low -> medium -> high -> low
+                  const currentPriority = priority || selectedContact?.metadata?.priority || 'medium';
+                  const nextPriority = currentPriority === 'low' ? 'medium' : 
+                                      currentPriority === 'medium' ? 'high' : 'low';
                   handlePriorityChange(nextPriority);
                 }}
-                size="sm"
-                className="ml-2"
               />
             </div>
           </div>
@@ -1301,7 +1517,7 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
                   onClick={() => setShowBackgroundSettings(true)}
                   className="text-header-foreground hover:bg-accent rounded-full"
                 >
-                  <Image className="h-4 w-4" />
+                  <Images className="h-4 w-4" />
                 </Button>
               </TooltipTrigger>
               <TooltipContent className="bg-popover text-popover-foreground" side="bottom">
@@ -1309,8 +1525,25 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
               </TooltipContent>
             </Tooltip>
             
-            {/* Summary Button - FIXED: Different icon and tooltip */}
-            {/* <Tooltip>
+            {/* AI Chatbot Button */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setShowChatbot(!showChatbot)}
+                  className="text-header-foreground hover:bg-accent rounded-full"
+                >
+                  <BotMessageSquare className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent className="bg-popover text-popover-foreground" side="bottom">
+                <p>Summarize chat</p>
+              </TooltipContent>
+            </Tooltip>
+            
+            {/* Summary Button */}
+            <Tooltip>
               <TooltipTrigger asChild>
                 <Button
                   variant="ghost"
@@ -1320,16 +1553,16 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
                   className="text-header-foreground hover:bg-accent rounded-full"
                 >
                   {isSummarizing ? (
-                    <RiAiGenerate className="h-4 w-4 animate-pulse" />
+                    <BotMessageSquare className="h-4 w-4 animate-pulse" />
                   ) : (
-                    <RiAiGenerate className="h-4 w-4" />
+                    <BotMessageSquare className="h-4 w-4" />
                   )}
                 </Button>
               </TooltipTrigger>
               <TooltipContent className="bg-popover text-popover-foreground" side="bottom">
-                <p>Generate chat summary</p>
+                <p>Summarize chat</p>
               </TooltipContent>
-            </Tooltip> */}
+            </Tooltip>
             
             {/* Close Button */}
             <Tooltip>
@@ -1377,7 +1610,8 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
         <LoadingChatView details={syncState.details} />
       ) : (
         <div className="relative flex flex-col h-full">
-          <SyncProgressIndicator syncState={syncState} loadingState={loadingState} />
+          <ConnectionStatusIndicator syncState={syncState} loadingState={loadingState} />
+          <ConnectionStatusBanner />
 
           {/* Header with contact info and close button */}
           {renderHeader()}
@@ -1395,7 +1629,8 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
               maxWidth: "100%"
             }}
             onScroll={async (e) => {
-              const { scrollTop, scrollHeight, clientHeight } = e.target;
+              const target = e.target as HTMLDivElement;
+              const { scrollTop, scrollHeight, clientHeight } = target;
               if (scrollTop === 0 && hasMoreMessages && !loading) {
                 const nextPage = currentPage + 1;
                 await dispatch(
@@ -1430,7 +1665,7 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
                   <div>
                     <h4 className="text-foreground font-medium mb-1">Main Points</h4>
                     <ul className="list-disc list-inside text-muted-foreground space-y-1">
-                      {summaryData.summary.mainPoints.map((point, index) => (
+                      {summaryData.summary.mainPoints.map((point: string, index: number) => (
                         <li key={index}>{point}</li>
                       ))}
                     </ul>
@@ -1439,7 +1674,7 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
                     <div>
                       <h4 className="text-foreground font-medium mb-1">Action Items</h4>
                       <ul className="list-disc list-inside text-muted-foreground space-y-1">
-                        {summaryData.summary.actionItems.map((item, index) => (
+                        {summaryData.summary.actionItems.map((item: string, index: number) => (
                           <li key={index}>{item}</li>
                         ))}
                       </ul>
@@ -1449,7 +1684,7 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
                     <div>
                       <h4 className="text-foreground font-medium mb-1">Key Decisions</h4>
                       <ul className="list-disc list-inside text-muted-foreground space-y-1">
-                        {summaryData.summary.keyDecisions.map((decision, index) => (
+                        {summaryData.summary.keyDecisions.map((decision: string, index: number) => (
                           <li key={index}>{decision}</li>
                         ))}
                       </ul>
@@ -1471,15 +1706,28 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
             onClose={() => setShowBackgroundSettings(false)}
             platform="telegram"
           />
+
+          {/* Add telegramChatbot component when showChatbot is true */}
+          {/* {showChatbot && selectedContact?.id && (
+            <div className="border-t border-border">
+              <TelegramChatbot contactId={selectedContact.id} />
+            </div>
+          )} */}
         </div>
       )}
+
+      {/* Add Chatbot component when a contact is selected */}
+      {/* {selectedContact?.id && <Chatbot contactId={selectedContact.id} />} */}
+      
+      {/* 🚀 NEW: Developer Debug Overlay */}
+      <DebugOverlay />
     </div>
   );
 };
 
 
 // Wrap ChatView with ErrorBoundary
-export const ChatViewWithErrorBoundary = (props) => (
+export const ChatViewWithErrorBoundary = (props: any) => (
   <ErrorBoundary FallbackComponent={ErrorFallback}>
     <div className="w-full h-full">
       <ChatView {...props} />

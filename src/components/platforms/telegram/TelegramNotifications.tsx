@@ -1,95 +1,110 @@
-import React, { useEffect, useCallback } from 'react';
+import React, { useEffect, useCallback, useRef } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { useInboxNotifications } from '@liveblocks/react';
 import { updateContactLastMessage } from '@/store/slices/contactSlice';
+import type { RootState } from '@/store/store';
 import logger from '@/utils/logger';
-import type { RootState, AppDispatch } from '@/store/store';
 
 const TelegramNotifications: React.FC = () => {
-  const dispatch = useDispatch<AppDispatch>();
   const { inboxNotifications } = useInboxNotifications();
   const session = useSelector((state: RootState) => state.auth.session);
+  const dispatch = useDispatch();
+  
+  // 🚀 PERFORMANCE FIX: Track processed notifications to prevent duplicates
+  const processedNotificationIds = useRef(new Set<string>());
+  
+  // 🚀 PERFORMANCE FIX: Debounce processing to prevent excessive updates
+  const processingTimer = useRef<NodeJS.Timeout | null>(null);
 
-  // Process Telegram notifications and update contact list
   const processNotifications = useCallback(() => {
     if (!inboxNotifications || !session?.user?.id) return;
 
-    // Filter for Telegram notifications
-    const telegramNotifications = inboxNotifications.filter(
-      notification => notification.kind === '$telegramMessage' && !notification.readAt
-    );
+    // 🚀 PERFORMANCE FIX: Clear processing timer
+    if (processingTimer.current) {
+      clearTimeout(processingTimer.current);
+    }
 
-    telegramNotifications.forEach(notification => {
-      if (notification.activities?.[0]?.data) {
-        const activityData = notification.activities[0].data;
-        const { contact_id, message, timestamp } = activityData;
+    // 🚀 PERFORMANCE FIX: Debounce processing
+    processingTimer.current = setTimeout(() => {
+      const telegramNotifications = inboxNotifications.filter(
+        notification => notification.kind === '$telegramMessage' && !notification.readAt
+      );
 
-        if (contact_id && message) {
-          logger.info('🔔 Processing Telegram notification for contact list update:', {
-            contactId: contact_id,
-            message: message.substring(0, 50) + '...',
-            timestamp: timestamp
-          });
+      let hasUpdates = false;
 
-          // Update contact's last message in Redux
-          dispatch(updateContactLastMessage({
-            contactId: parseInt(String(contact_id)),
-            lastMessage: message,
-            lastMessageAt: timestamp || Date.now()
-          }));
-
-          // Dispatch custom event for real-time updates
-          window.dispatchEvent(new CustomEvent('telegram-message-update', {
-            detail: {
-              contactId: contact_id,
-              message: message,
-              timestamp: timestamp || Date.now()
-            }
-          }));
+      telegramNotifications.forEach(notification => {
+        const notificationId = notification.id;
+        
+        // 🚀 PERFORMANCE FIX: Skip already processed notifications
+        if (processedNotificationIds.current.has(notificationId)) {
+          return;
         }
+        
+        processedNotificationIds.current.add(notificationId);
+
+        if (notification.activities?.[0]?.data) {
+          const activityData = notification.activities[0].data;
+          const { contact_id, message, timestamp } = activityData;
+
+          if (contact_id && message) {
+            logger.info('🔔 Processing Telegram notification for contact list update:', {
+              contactId: contact_id,
+              message: message.substring(0, 50) + '...',
+              timestamp: timestamp
+            });
+
+            // Update contact's last message in Redux
+            dispatch(updateContactLastMessage({
+              contactId: parseInt(String(contact_id)),
+              lastMessage: message,
+              lastMessageAt: timestamp || Date.now()
+            }));
+
+            hasUpdates = true;
+          }
+        }
+      });
+
+      // 🚀 PERFORMANCE FIX: Only dispatch custom event if there were actual updates
+      if (hasUpdates) {
+        // Single batched event instead of multiple individual events
+        window.dispatchEvent(new CustomEvent('telegram-notifications-processed', {
+          detail: {
+            count: telegramNotifications.length,
+            timestamp: Date.now()
+          }
+        }));
       }
-    });
+    }, 300); // 300ms debounce delay
   }, [inboxNotifications, session?.user?.id, dispatch]);
+
+  // 🚀 PERFORMANCE FIX: Cleanup timer on unmount
+  useEffect(() => {
+    return () => {
+      if (processingTimer.current) {
+        clearTimeout(processingTimer.current);
+      }
+    };
+  }, []);
 
   // Process notifications on mount and when they change
   useEffect(() => {
     processNotifications();
   }, [processNotifications]);
 
-  // Listen for real-time Telegram message events from WebSocket
+  // 🚀 PERFORMANCE FIX: Cleanup old processed notification IDs periodically
   useEffect(() => {
-    const handleTelegramMessage = (event: CustomEvent) => {
-      const { contactId, message, timestamp, isOwnMessage } = event.detail;
-      
-      if (contactId && message) {
-        logger.info('📨 Received Telegram message event:', {
-          contactId,
-          message: message.substring(0, 50) + '...',
-          timestamp,
-          isOwnMessage
-        });
-
-        // Update contact's last message in Redux
-        dispatch(updateContactLastMessage({
-          contactId: parseInt(String(contactId)),
-          lastMessage: message,
-          lastMessageAt: timestamp || Date.now()
-        }));
+    const cleanup = setInterval(() => {
+      if (processedNotificationIds.current.size > 1000) {
+        processedNotificationIds.current.clear();
+        logger.info('[TelegramNotifications] Cleared processed notification IDs cache');
       }
-    };
+    }, 60000); // Clean every minute
+    
+    return () => clearInterval(cleanup);
+  }, []);
 
-    // Listen for both traditional and enhanced message events
-    window.addEventListener('telegram-message-received', handleTelegramMessage as EventListener);
-    window.addEventListener('telegram-message-update', handleTelegramMessage as EventListener);
-
-    return () => {
-      window.removeEventListener('telegram-message-received', handleTelegramMessage as EventListener);
-      window.removeEventListener('telegram-message-update', handleTelegramMessage as EventListener);
-    };
-  }, [dispatch]);
-
-  // This component doesn't render anything - it just processes notifications
-  return null;
+  return null; // This component only handles notifications, no UI
 };
 
 export default TelegramNotifications; 

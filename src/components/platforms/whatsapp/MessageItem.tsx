@@ -1,5 +1,7 @@
 import React from 'react';
 import { format } from 'date-fns';
+import { useSelector } from 'react-redux';
+import { RootState } from '../../../../store';
 
 // Add TypeScript interface for the component props
 interface MessageItemProps {
@@ -12,15 +14,42 @@ interface MessageItemProps {
     timestamp?: string | number | Date;
     media_url?: string;
     status?: 'sent' | 'delivered' | 'read' | string;
+    isOptimistic?: boolean; // Added for optimistic UI
+    isSender?: boolean; // Added for platform SDK
+    sender_name?: string; // Added for alternative sender name check
   };
-  currentUser: {
-    id?: string | number;
-  } | null;
+  // REMOVED: No longer passing currentUser as a prop, will get from Redux store
+  // currentUser: {
+  //   id?: string | number;
+  // } | null;
   className?: string;
 }
 
-const MessageItem: React.FC<MessageItemProps> = ({ message, currentUser, className = '' }) => {
-  const isOutgoing = message.sender_id === currentUser?.id || message.is_outgoing;
+const MessageItem: React.FC<Omit<MessageItemProps, 'currentUser'>> = ({ message, className = '' }) => {
+  // CRITICAL FIX: Get the currentUser directly from the Redux store to ensure it's never null
+  const currentUser = useSelector((state: RootState) => state.auth.user);
+
+  // CRITICAL FIX: A message is from the current user if its sender_id or sender_name
+  // contains the user's UUID.
+  // User sender_name: user87c4831b-efd0-43e3-8b7d-84f8ab3de538matrix
+  // User sender_id: @user87c4831b-efd0-43e3-8b7d-84f8ab3de538matrix:dfix-hsbridge.duckdns.org
+  // Contact sender_name: +916303357650
+  // Contact sender_id: @whatsapp_916303357650:dfix-hsbridge.duckdns.org
+  const sentByCurrentUser = (
+    identifier: string | number | undefined, 
+    userId: string | number | undefined
+  ): boolean => {
+    if (typeof identifier !== 'string' || typeof userId !== 'string' || !userId) {
+      return false;
+    }
+    return identifier.includes(userId);
+  };
+
+  const isOutgoing = 
+    message.isSender || // Platform SDK property
+    message.is_outgoing ||  // Backend property
+    sentByCurrentUser(message.sender_id, currentUser?.id) || // Check sender_id
+    sentByCurrentUser(message.sender_name, currentUser?.id);   // Check sender_name
   
   // CRITICAL FIX: Safely format the timestamp with validation
   const formattedTime = (() => {
@@ -35,17 +64,26 @@ const MessageItem: React.FC<MessageItemProps> = ({ message, currentUser, classNa
     }
   })();
   
-  // Generate message status icon based on status
+  // Generate message status icon based on status with optimistic UI
   const getStatusIcon = () => {
+    // Handle optimistic messages
+    if (message.isOptimistic) {
+      return <span className="text-green-200 animate-pulse text-sm">⏳</span>;
+    }
+    
     switch (message.status) {
+      case 'sending':
+        return <span className="text-green-200 animate-pulse text-sm">⏳</span>;
       case 'sent':
-        return <span className="text-gray-400">✓</span>;
+        return <span className="text-green-200 text-sm">✓</span>;
       case 'delivered':
-        return <span className="text-gray-400">✓✓</span>;
+        return <span className="text-green-200 text-sm">✓✓</span>;
       case 'read':
-        return <span className="text-blue-400">✓✓</span>;
+        return <span className="text-green-300 text-sm font-semibold">✓✓</span>;
+      case 'failed':
+        return <span className="text-red-300 text-sm">⚠️</span>;
       default:
-        return null;
+        return <span className="text-green-200 text-sm">✓</span>;
     }
   };
 
@@ -77,11 +115,11 @@ const MessageItem: React.FC<MessageItemProps> = ({ message, currentUser, classNa
       <div 
         className={`rounded-lg px-3 py-2 max-w-full ${
           isOutgoing 
-            ? 'bg-chat-bubble-sent text-chat-bubble-sent-foreground mr-2 rounded-tr-none' 
-            : 'bg-chat-bubble text-chat-bubble-foreground ml-2 rounded-tl-none'
+            ? 'bg-green-500 text-white mr-2 rounded-tr-none shadow-md' 
+            : 'bg-white text-gray-900 ml-2 rounded-tl-none shadow-md border border-gray-200'
         }`}
         style={{
-          maxWidth: '100%',
+          maxWidth: '85%',
           wordBreak: 'break-word',
           overflowWrap: 'break-word',
           whiteSpace: 'pre-wrap',
@@ -89,6 +127,18 @@ const MessageItem: React.FC<MessageItemProps> = ({ message, currentUser, classNa
           overflow: 'hidden'
         }}
       >
+        {/* --- VITAL DEBUGGING --- */}
+        <div className="p-1 mb-2 text-xs bg-yellow-100 border border-yellow-300 rounded">
+          <p className="font-bold text-red-600">isOutgoing: {isOutgoing ? 'YES' : 'NO'}</p>
+          <p className="font-mono text-gray-700" title={String(message.sender_name)}>
+            <span className="font-semibold">Name:</span> {String(message.sender_name || 'N/A')}
+          </p>
+          <p className="font-mono text-gray-700" title={String(message.sender_id)}>
+            <span className="font-semibold">ID:</span> {String(message.sender_id || 'N/A')}
+          </p>
+        </div>
+        {/* --- END DEBUGGING --- */}
+
         {message.content && (
           <div className="text-sm whitespace-pre-wrap break-words overflow-hidden">
             {getMessageContent(message.content)}
@@ -106,7 +156,9 @@ const MessageItem: React.FC<MessageItemProps> = ({ message, currentUser, classNa
           </div>
         )}
         
-        <div className="flex justify-end items-center mt-1 space-x-1 text-xs text-muted-foreground">
+        <div className={`flex justify-end items-center mt-1 space-x-1 text-xs ${
+          isOutgoing ? 'text-green-100' : 'text-gray-600'
+        }`}>
           <span>{formattedTime}</span>
           {isOutgoing && getStatusIcon()}
         </div>

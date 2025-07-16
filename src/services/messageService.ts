@@ -2,8 +2,36 @@ import api from '../utils/api';
 import logger from '../utils/logger';
 import { v4 as uuidv4 } from 'uuid';
 
+// 🚀 ENHANCED: Add proper TypeScript interfaces
+interface MessageParams {
+  limit?: number;
+  page?: number;
+}
+
+interface MessageResponse {
+  messages: any[];
+  hasMore: boolean;
+}
+
+interface SendMessageResult {
+  messageId: string;
+  status: string;
+  timestamp: string;
+}
+
+interface MessageContent {
+  content: string;
+  type?: string;
+}
+
+interface CustomError extends Error {
+  code?: string;
+  contactId?: number;
+  platform?: string;
+}
+
 class MessageService {
-  async fetchMessages(contactId, params = {}, platform = 'whatsapp') {
+  async fetchMessages(contactId: string, params: MessageParams = {}, platform = 'whatsapp'): Promise<MessageResponse> {
     try {
       const apiPrefix = `/api/v1/${platform}`;
       const response = await api.get(`${apiPrefix}/contacts/${contactId}/messages`, {
@@ -21,7 +49,7 @@ class MessageService {
         messages: response.data.data?.messages || response.data.messages || [],
         hasMore: (response.data.data?.messages || response.data.messages || []).length === (params.limit || 20)
       };
-    } catch (error) {
+    } catch (error: any) {
       // Handle 410 status code - contact was auto-deleted due to room not found
       if (error.response?.status === 410) {
         const errorData = error.response.data;
@@ -43,7 +71,7 @@ class MessageService {
         }));
         
         // Throw a specific error that the UI can catch and handle gracefully
-        const contactRemovedError = new Error(errorData?.message || 'Contact has been removed as it is no longer accessible');
+        const contactRemovedError = new Error(errorData?.message || 'Contact has been removed as it is no longer accessible') as CustomError;
         contactRemovedError.code = 'CONTACT_REMOVED';
         contactRemovedError.contactId = parseInt(contactId);
         contactRemovedError.platform = platform;
@@ -55,7 +83,47 @@ class MessageService {
     }
   }
 
-  async fetchNewMessages(contactId, lastEventId, platform = 'whatsapp') {
+  // 🚀 NEW: Send message method
+  async sendMessage(contactId: string, message: MessageContent, platform = 'whatsapp'): Promise<SendMessageResult> {
+    try {
+      const apiPrefix = `/api/v1/${platform}`;
+      const response = await api.post(`${apiPrefix}/contacts/${contactId}/messages`, {
+        message: message.content,
+        type: message.type || 'text'
+      });
+
+      if (!response.data || typeof response.data !== 'object') {
+        throw new Error('Invalid response format');
+      }
+
+      return {
+        messageId: response.data.messageId || response.data.id || uuidv4(),
+        status: 'sent',
+        timestamp: new Date().toISOString()
+      };
+    } catch (error) {
+      logger.error(`[MessageService] Error sending ${platform} message:`, error);
+      throw error;
+    }
+  }
+
+  // 🚀 NEW: Mark messages as read method
+  async markAsRead(contactId: string, messageIds: string[], platform = 'whatsapp'): Promise<any> {
+    try {
+      const apiPrefix = `/api/v1/${platform}`;
+      const response = await api.post(`${apiPrefix}/contacts/${contactId}/messages/read`, {
+        messageIds
+      });
+
+      logger.info(`[MessageService] Marked ${messageIds.length} ${platform} messages as read for contact ${contactId}`);
+      return response.data;
+    } catch (error) {
+      logger.error(`[MessageService] Error marking ${platform} messages as read:`, error);
+      throw error;
+    }
+  }
+
+  async fetchNewMessages(contactId: string, lastEventId: string, platform = 'whatsapp'): Promise<{ messages: any[]; hasMore: boolean; warning?: string }> {
     try {
       const apiPrefix = `/api/v1/${platform}`;
       const response = await api.get(`${apiPrefix}/contacts/${contactId}/newMessages`, {
@@ -68,9 +136,10 @@ class MessageService {
 
       return {
         messages: response.data.data?.messages || [],
-        hasMore: false // New messages endpoint doesn't support pagination
+        hasMore: false, // New messages endpoint doesn't support pagination
+        warning: response.data.warning // 🚀 FIX: Include warning from server response
       };
-    } catch (error) {
+    } catch (error: any) {
       // Check if error is related to Matrix server
       if (error.response?.status === 500 && error.response?.data?.error?.includes('Matrix')) {
         logger.warn(`[MessageService] Matrix server sync unavailable for ${platform}:`, error);
@@ -87,20 +156,8 @@ class MessageService {
     }
   }
 
-  _createContentHash(content) {
-    const str = JSON.stringify(content);
-    let hash = 0;
-    
-    for (let i = 0; i < str.length; i++) {
-      const char = str.charCodeAt(i);
-      hash = (hash << 5) - hash + char;
-      hash |= 0; // Convert to 32bit integer
-    }
-    
-    return hash.toString(36) + str.length.toString(36);
-  }
-
-  normalizeMessage(message) {
+  // 🚀 ENHANCED: Better message normalization with content hash for deduplication
+  normalizeMessage(message: any): any {
     // Ensure we have valid timestamps
     const now = new Date().toISOString();
     const safeTimestamp = message.timestamp ? new Date(message.timestamp).toISOString() : now;
@@ -109,8 +166,8 @@ class MessageService {
     // Normalize content
     const normalizedContent = this._normalizeContent(message.content);
     
-    // Create content hash
-    const contentHash = this._createContentHash(normalizedContent);
+    // Create content hash for better deduplication
+    const contentHash = this._createContentHash(normalizedContent, message.sender_id, safeTimestamp);
 
     const baseMessage = {
       ...message,
@@ -119,67 +176,46 @@ class MessageService {
       received_at: safeReceivedAt,
       timestamp: safeTimestamp,
       content: normalizedContent,
-      content_hash: contentHash
+      content_hash: contentHash,
+      // 🚀 NEW: Add normalized sender info
+      sender_id: message.sender_id || message.sender || 'unknown',
+      type: message.type || 'text',
+      status: message.status || 'received'
     };
 
     return baseMessage;
   }
 
-  _normalizeContent(content) {
+  // 🚀 ENHANCED: Better content normalization
+  _normalizeContent(content: any): string {
     if (!content) return '';
     
-    // If content is a string that looks like JSON, try to parse it
-    if (typeof content === 'string' && content.startsWith('{')) {
-      try {
-        const parsed = JSON.parse(content);
-        return parsed.body || parsed.content || content;
-      } catch {
-        return content;
-      }
+    // Handle different content types
+    if (typeof content === 'object') {
+      return content.body || content.text || content.message || JSON.stringify(content);
     }
     
-    // If content is an object with body property
-    if (typeof content === 'object' && content.body) {
-      return content.body;
+    return String(content).trim();
+  }
+
+  // 🚀 ENHANCED: Better content hash for deduplication
+  _createContentHash(content: string, senderId: string, timestamp: string): string {
+    // Create a simple hash based on content + sender + timestamp (rounded to minute)
+    const minuteTimestamp = Math.floor(new Date(timestamp).getTime() / 60000) * 60000;
+    const hashString = `${content}_${senderId}_${minuteTimestamp}`;
+    
+    // Simple hash function
+    let hash = 0;
+    for (let i = 0; i < hashString.length; i++) {
+      const char = hashString.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32-bit integer
     }
     
-    // Otherwise return the content as is
-    return content;
+    return Math.abs(hash).toString(36);
   }
 
-  async sendMessage(contactId, message, platform = 'whatsapp') {
-    try {
-      const apiPrefix = `/api/v1/${platform}`;
-      const response = await api.post(
-        `${apiPrefix}/send/${contactId}`,
-        message
-      );
-
-      if (response.data?.status !== 'success' && !response.data?.messageId) {
-        throw new Error(response.data?.message || 'Failed to send message');
-      }
-
-      return response.data;
-    } catch (error) {
-      logger.error(`[MessageService] Error sending ${platform} message:`, error);
-      throw error;
-    }
-  }
-
-  async markMessagesAsRead(contactId, messageIds, platform = 'whatsapp') {
-    try {
-      const apiPrefix = `/api/v1/${platform}`;
-      await api.post(`${apiPrefix}/contacts/${contactId}/messages/read`, {
-        messageIds: Array.from(messageIds)
-      });
-      return true;
-    } catch (error) {
-      logger.error(`[MessageService] Error marking ${platform} messages as read:`, error);
-      throw error;
-    }
-  }
-
-  async refreshMessages(contactId, platform = 'whatsapp') {
+  async refreshMessages(contactId: string, platform = 'whatsapp'): Promise<{ messages: any[]; metadata: any }> {
     try {
       const apiPrefix = `/api/v1/${platform}`;
       const response = await api.get(`${apiPrefix}/contacts/${contactId}/refreshMessages`);

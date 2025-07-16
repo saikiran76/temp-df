@@ -147,7 +147,7 @@ const TelegramBridgeSetup = ({ onComplete, onCancel, relogin = false }: Telegram
     try {
       logger.info('[telegramBridgeSetup] Polling telegram login status...');
       const response = await api.get('/api/v1/matrix/telegram/status', {
-        timeout: 10000 // 10 second timeout to prevent hanging requests
+        timeout: 30000 // 30 second timeout to prevent hanging requests
       });
 
       logger.info('[telegramBridgeSetup] Status response:', response.data);
@@ -217,9 +217,9 @@ const TelegramBridgeSetup = ({ onComplete, onCancel, relogin = false }: Telegram
       logger.info('[telegramBridgeSetup] Starting QR code timer');
       
       // Create a ref to track current time
-      const timeLeftRef = { current: 10 }; // Changed from 20 to 10 seconds
+      const timeLeftRef = { current: 15 }; // Changed from 10 to 15 seconds
       
-      // Start with 10 seconds for QR code validity
+      // Start with 15 seconds for QR code validity
       dispatch(setTelegramTimeLeft(timeLeftRef.current));
       
       const interval = setInterval(() => {

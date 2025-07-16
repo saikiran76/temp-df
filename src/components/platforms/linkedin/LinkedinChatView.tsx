@@ -234,6 +234,20 @@ const LoadingChatView = ({ details }) => {
   // Select a random fun fact
   const randomFact = SOCIAL_MEDIA_FUN_FACTS[Math.floor(Math.random() * SOCIAL_MEDIA_FUN_FACTS.length)];
 
+  // Transform technical details into user-friendly messages
+  const getUserFriendlyMessage = (details) => {
+    if (details?.includes('cache') || details?.includes('Cache')) {
+      return 'Loading your chat...';
+    }
+    if (details?.includes('sync') || details?.includes('Sync')) {
+      return 'Connecting to chat...';
+    }
+    if (details?.includes('refresh') || details?.includes('Refresh')) {
+      return 'Updating messages...';
+    }
+    return details || 'Loading...';
+  };
+
   return (
     <div className="flex flex-col h-full bg-chat">
       {/* Header Skeleton */}
@@ -261,8 +275,9 @@ const LoadingChatView = ({ details }) => {
         <Card className="max-w-md px-6 py-4 bg-neutral-800 border-neutral-700">
           <CardContent className="flex flex-col items-center p-0">
             <LavaLamp className="w-12 h-24 mb-3" />
-            <CardTitle className="text-white font-medium text-center mb-1">Connecting to chat...</CardTitle>
-            <p className="text-sm text-gray-300 mb-2">{details}</p>
+            <CardTitle className="text-white font-medium text-center mb-1">
+              {getUserFriendlyMessage(details)}
+            </CardTitle>
             <p className="text-xs text-gray-400 italic text-center mt-2 max-w-[300px]">
               {randomFact}
             </p>
@@ -273,7 +288,7 @@ const LoadingChatView = ({ details }) => {
   );
 };
 
-const SyncProgressIndicator = ({ syncState, loadingState }) => {
+const ConnectionStatusIndicator = ({ syncState, loadingState }) => {
   const getStatusColor = () => {
     if (syncState.state === SYNC_STATES.REJECTED) {
         return 'bg-red-500';
@@ -290,27 +305,33 @@ const SyncProgressIndicator = ({ syncState, loadingState }) => {
     return null;
   }
 
-  // Show appropriate loading message based on state
+  // Show appropriate connection status message
   const getMessage = () => {
     switch (loadingState) {
       case LOADING_STATES.CONNECTING:
-        return 'Connecting to chat room...';
+        return 'Connecting...';
       case LOADING_STATES.FETCHING:
-        return 'Getting your messages...';
+        return 'Loading messages...';
+      case LOADING_STATES.ERROR:
+        return 'Connection failed';
       default:
-        return syncState.details;
+        return syncState.details || 'Connecting...';
     }
   };
 
-  // Using Shadcn UI components now
+  // Only show message count for actual sync progress, not for connection status
+  const shouldShowProgress = syncState.state === SYNC_STATES.APPROVED && 
+                           syncState.processedMessages > 0 && 
+                           syncState.totalMessages > 0;
+
   return (
     <div className="absolute top-0 left-0 right-0 z-10">
       <Card className="m-4 bg-[#24283b] border-none shadow-lg">
         <CardContent className="p-4 space-y-2">
           <div className="flex justify-between text-sm text-gray-400">
             <span>{getMessage()}</span>
-            {syncState.state === SYNC_STATES.APPROVED && (
-              <span>{syncState.processedMessages} / {syncState.totalMessages} messages</span>
+            {shouldShowProgress && (
+              <span>{syncState.processedMessages} / {syncState.totalMessages}</span>
             )}
           </div>
           <div className="w-full bg-gray-700 rounded-full overflow-hidden">
@@ -321,7 +342,7 @@ const SyncProgressIndicator = ({ syncState, loadingState }) => {
           </div>
           {syncState.state === SYNC_STATES.REJECTED && syncState.errors?.length > 0 && (
             <div className="text-xs text-red-400 mt-1">
-              {syncState.errors[syncState.errors.length - 1].message}
+              Unable to connect. Please check your internet connection.
             </div>
           )}
         </CardContent>
@@ -342,7 +363,7 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
   const messages = useSelector((state: any) => selectMessages(state, selectedContact?.id) || []);
   const loading = useSelector((state: any) => selectMessageLoading(state) || false);
   const error = useSelector((state: any) => selectMessageError(state) || null);
-  const hasMoreMessages = useSelector((state: any) => selectHasMoreMessages(state) || false);
+  const hasMoreMessages = useSelector((state: any) => selectHasMoreMessages(state, selectedContact?.id) || false);
   const currentPage = useSelector((state: any) => selectCurrentPage(state) || 0);
   const messageQueue = useSelector((state: any) => selectMessageQueue(state) || []);
   const unreadMessageIds = useSelector((state: any) => selectUnreadMessageIds(state) || []);
@@ -539,7 +560,7 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
       ).unwrap();
 
       if (result?.warning) {
-        toast.warn(result.warning);
+        toast.error(result.warning); // Changed from toast.warn to toast.error
         return;
       }
 
@@ -547,7 +568,7 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
         scrollToBottom();
         toast.success(`${result.messages.length} new message(s) received`);
       } else {
-        toast.info('No new messages');
+        toast.success('No new messages'); // Changed from toast.info to toast.success
       }
     } catch (error) {
       logger.error('[ChatView] Error fetching new messages:', error);
@@ -573,6 +594,7 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
     };
   }, []);
 
+  // 🚀 CRITICAL FIX: Smart message loading with caching (like WhatsApp)
   useEffect(() => {
     if (!selectedContact?.id) return;
 
@@ -604,9 +626,30 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
             contactId: selectedContact.id,
             error: error.message,
           });
-          toast.warn('Real-time updates may be delayed but you can use the "new messages" button for new updates');
+          toast('Real-time updates may be delayed but you can use the "new messages" button for new updates');
         })
         .finally(() => {
+          // 🚀 CRITICAL FIX: Check if we have cached messages before loading
+          if (messages.length > 0) {
+            logger.info('[ChatView] ✅ Using existing cached messages:', {
+              contactId: selectedContact.id,
+              messageCount: messages.length
+            });
+            
+            setLoadingState(LOADING_STATES.COMPLETE);
+            setSyncState((prev) => ({
+              ...prev,
+              state: SYNC_STATES.APPROVED,
+              progress: 100,
+              details: 'Chat ready',
+              processedMessages: messages.length,
+              totalMessages: messages.length,
+            }));
+            return;
+          }
+
+          // Only load if we don't have cached messages
+          logger.info('[ChatView] 📥 Loading messages from server (no cache)');
           setLoadingState(LOADING_STATES.FETCHING);
           setSyncState((prev) => ({
             ...prev,
@@ -617,7 +660,8 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
             totalMessages: 0,
           }));
 
-          dispatch(clearMessages());
+          // 🚀 CRITICAL FIX: Don't clear messages - let Redux handle caching
+          // dispatch(clearMessages()); // REMOVED
 
           dispatch(
             fetchMessages({
@@ -644,49 +688,6 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
                 contactId: selectedContact.id,
                 error: error.message,
               });
-              
-              // Handle contact removal due to room not found
-              if (error.code === 'CONTACT_REMOVED') {
-                logger.info('[ChatView] Contact was auto-deleted, navigating back to dashboard');
-                setLoadingState(LOADING_STATES.ERROR);
-                setSyncState((prev) => ({
-                  ...prev,
-                  state: SYNC_STATES.REJECTED,
-                  progress: 0,
-                  details: 'Contact no longer accessible',
-                  errors: [
-                    ...(prev.errors || []),
-                    {
-                      message: 'Contact has been removed as it is no longer accessible',
-                      timestamp: Date.now(),
-                    },
-                  ],
-                }));
-                
-                // Show a more user-friendly message
-                toast.error('This contact is no longer accessible and has been removed', {
-                  duration: 5000,
-                  style: {
-                    background: '#EF4444',
-                    color: '#ffffff',
-                    border: 'none',
-                    borderRadius: '8px',
-                    boxShadow: '0 4px 12px rgba(239, 68, 68, 0.15)',
-                  },
-                });
-                
-                // Navigate back to dashboard after a short delay
-                setTimeout(() => {
-                  if (typeof onClose === 'function') {
-                    onClose();
-                  } else {
-                    navigate('/dashboard');
-                  }
-                }, 2000);
-                
-                return;
-              }
-              
               setLoadingState(LOADING_STATES.ERROR);
               setSyncState((prev) => ({
                 ...prev,
@@ -704,28 +705,24 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
               toast.error('Failed to load messages');
             });
         });
-    }
-  }, [dispatch, selectedContact?.id, selectedContact?.membership]);
-
-  useEffect(() => {
-    if (selectedContact?.id) {
-      setLoadingState(LOADING_STATES.CONNECTING);
+    } else if (selectedContact?.membership !== 'join') {
+      // If the membership isn't 'join', show an appropriate message
+      logger.info('[ChatView] Contact does not have join membership:', {
+        contactId: selectedContact.id,
+        membership: selectedContact.membership
+      });
+      
+      setLoadingState(LOADING_STATES.ERROR);
       setSyncState((prev) => ({
         ...prev,
-        state: SYNC_STATES.PENDING,
+        state: SYNC_STATES.REJECTED,
         progress: 0,
-        details: 'Initializing chat...',
-        processedMessages: 0,
-        totalMessages: 0,
+        details: `Cannot load messages: ${selectedContact.membership} status`,
       }));
-    } else {
-      setLoadingState(LOADING_STATES.IDLE);
-      setSyncState((prev) => ({
-        ...prev,
-        state: SYNC_STATES.IDLE,
-      }));
+      
+      toast.error(`Cannot load messages for ${selectedContact.membership} status`);
     }
-  }, [selectedContact?.id]);
+  }, [dispatch, selectedContact?.id, selectedContact?.membership, messages.length]);
 
   useEffect(() => {
     if (!socket || !selectedContact?.id) return;
@@ -780,15 +777,17 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
 
     const handleNewMessage = (payload, ack) => {
       // Log message receipt
-      logger.info('[ChatView] New message received via socket:', {
+      logger.info('[LinkedinChatView] New message received via socket:', {
         hasAck: !!ack,
         contactId: payload?.contactId,
-        messageId: payload?.message?.message_id || 'unknown',
-        timestamp: payload?.message?.timestamp
+        messageId: payload?.message?.message_id || payload?.messageId || 'unknown',
+        timestamp: payload?.message?.timestamp || payload?.timestamp,
+        eventType: payload.message ? 'traditional' : 'enhanced',
+        isOwnMessage: payload?.isOwnMessage,
+        isOutgoing: payload?.isOutgoing
       });
 
-      // Always acknowledge receipt, even if we don't process the message
-      // This is critical for the server's guaranteed delivery system
+      // Always acknowledge receipt
       if (typeof ack === 'function') {
         try {
           ack({
@@ -796,40 +795,93 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
             received: true,
             timestamp: Date.now()
           });
-          logger.debug('[ChatView] Message acknowledged successfully');
+          logger.debug('[LinkedinChatView] Message acknowledged successfully');
         } catch (ackError) {
-          logger.error('[ChatView] Error acknowledging message:', ackError);
+          logger.error('[LinkedinChatView] Error acknowledging message:', ackError);
         }
       }
 
       // Process the message if it's for the selected contact
-      if (payload && payload.contactId === selectedContact?.id && payload.message) {
-        const messageId = payload.message.message_id || payload.message.id;
+      if (payload && payload.contactId === selectedContact?.id) {
+        // Handle enhanced event listener format (linkedin:message_received)
+        if (payload.message && typeof payload.message === 'string') {
+          // 🚀 CRITICAL FIX: Enhanced format with proper isOutgoing detection
+          const messageData = {
+            id: `received_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            message_id: `received_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            content: payload.message,
+            timestamp: payload.timestamp || new Date().toISOString(),
+            sender_id: payload.sender || 'unknown',
+            sender_name: payload.sender || 'Unknown',
+            message_type: 'text',
+            // 🔥 CRITICAL FIX: Use isOutgoing flag from Enhanced Event Listener
+            is_outgoing: payload.isOutgoing || payload.isOwnMessage || false,
+            isOwnMessage: payload.isOwnMessage || payload.isOutgoing || false
+          };
 
-        if (messageId && !processedMessageIds.has(messageId)) {
-          // Normalize the message format
-          const normalized = messageService.normalizeMessage(payload.message);
-          processedMessageIds.add(normalized.id);
+          if (!processedMessageIds.has(messageData.id)) {
+            processedMessageIds.add(messageData.id);
 
-          logger.info('[ChatView] Processing new message:', {
-            messageId: messageId,
-            content: payload.message.content,
-            timestamp: payload.message.timestamp,
-          });
+            logger.info('[LinkedinChatView] Processing enhanced message format:', {
+              messageId: messageData.id,
+              content: messageData.content,
+              timestamp: messageData.timestamp,
+              isOwnMessage: messageData.isOwnMessage,
+              isOutgoing: messageData.is_outgoing,
+              messageDirection: messageData.is_outgoing ? 'OUTGOING' : 'INCOMING'
+            });
 
-          dispatch({
-            type: 'messages/messageReceived',
-            payload: {
-              contactId: selectedContact.id,
-              message: normalized || payload.message,
-            },
-          });
-          scrollToBottom();
-        } else {
-          logger.info('[ChatView] Skipping duplicate message:', {
-            messageId,
-            timestamp: payload.message.timestamp,
-          });
+            dispatch({
+              type: 'messages/messageReceived',
+              payload: {
+                contactId: selectedContact.id,
+                message: messageData,
+              },
+            });
+
+            // Update contact with last message for all messages (incoming and outgoing)
+            onContactUpdate({
+              ...selectedContact,
+              last_message: messageData.content,
+              last_message_at: messageData.timestamp
+            });
+          }
+        }
+        // Handle traditional format (linkedin:message)
+        else if (payload.message && typeof payload.message === 'object') {
+          const messageData = {
+            ...payload.message,
+            // 🔥 CRITICAL FIX: Determine outgoing status for traditional format
+            is_outgoing: payload.message.is_outgoing || 
+                        payload.message.sender_id === currentUser?.id ||
+                        false
+          };
+
+          if (!processedMessageIds.has(messageData.id || messageData.message_id)) {
+            processedMessageIds.add(messageData.id || messageData.message_id);
+
+            logger.info('[LinkedinChatView] Processing traditional message format:', {
+              messageId: messageData.id || messageData.message_id,
+              content: messageData.content,
+              isOutgoing: messageData.is_outgoing,
+              messageDirection: messageData.is_outgoing ? 'OUTGOING' : 'INCOMING'
+            });
+
+            dispatch({
+              type: 'messages/messageReceived',
+              payload: {
+                contactId: selectedContact.id,
+                message: messageData,
+              },
+            });
+
+            // Update contact with last message for all messages (incoming and outgoing)
+            onContactUpdate({
+              ...selectedContact,
+              last_message: messageData.content,
+              last_message_at: messageData.timestamp
+            });
+          }
         }
       }
     };
@@ -852,16 +904,21 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
     const userRoom = `user:${currentUser.id}`;
     socket.emit('join:room', userRoom);
 
+    // 🚀 CRITICAL FIX: Clean up all event listeners before setting new ones
     socket.off('linkedin:message');
+    socket.off('linkedin:message_received'); // 🚀 NEW: Enhanced event listener events
     socket.off('linkedin:message:update');
     socket.off('room:joined');
     socket.off('room:error');
 
-    socket.on('linkedin:message', handleNewMessage);
+    // 🚀 CRITICAL FIX: Listen for both traditional and enhanced events
+    socket.on('linkedin:message', handleNewMessage); // Traditional events (if any)
+    socket.on('linkedin:message_received', handleNewMessage); // 🚀 NEW: Enhanced event listener events
     socket.on('linkedin:message:update', handleMessageUpdate);
 
     return () => {
-      socket.off('linkedin:message:new', handleNewMessage);
+      socket.off('linkedin:message', handleNewMessage);
+      socket.off('linkedin:message_received', handleNewMessage); // 🚀 NEW: Clean up enhanced events
       socket.off('linkedin:message:update', handleMessageUpdate);
     };
   }, [socket, selectedContact?.id, dispatch, currentPage, scrollToBottom]);
@@ -1123,8 +1180,8 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
       <div key={`${message.id}_${message.message_id}_${message.timestamp}`} className="w-full overflow-hidden">
         <MessageItem
           message={message}
-          currentUser={currentUser}
-          className="mb-3 max-w-[85%]"
+          // REMOVED: currentUser is now fetched from Redux store in MessageItem
+          // currentUser={currentUser}
         />
       </div>
     ));
@@ -1345,7 +1402,7 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
         <LoadingChatView details={syncState.details} />
       ) : (
         <div className="relative flex flex-col h-full">
-          <SyncProgressIndicator syncState={syncState} loadingState={loadingState} />
+          <ConnectionStatusIndicator syncState={syncState} loadingState={loadingState} />
 
           {/* Header with contact info and close button */}
           {renderHeader()}
@@ -1438,7 +1495,7 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
           <ChatBackgroundSettings 
             isOpen={showBackgroundSettings}
             onClose={() => setShowBackgroundSettings(false)}
-            platform="linkedin" as any
+            platform="linkedin"
           />
 
           {/* Add LinkedinChatbot component when showChatbot is true */}
