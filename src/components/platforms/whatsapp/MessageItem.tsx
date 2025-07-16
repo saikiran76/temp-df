@@ -1,7 +1,7 @@
 import React from 'react';
 import { format } from 'date-fns';
 import { useSelector } from 'react-redux';
-import { RootState } from '../../../../store';
+import type { RootState } from '@/store/store';
 
 // Add TypeScript interface for the component props
 interface MessageItemProps {
