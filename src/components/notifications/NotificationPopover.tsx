@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Bell } from "lucide-react";
 import { FaWhatsapp, FaTelegram } from "react-icons/fa";
-import { NotificationBadge } from "./NotificationBadge";
+import NotificationBadge from "./NotificationBadge";
 import { WhatsAppNotifications } from "./WhatsAppNotifications";
 import { TelegramNotifications } from "./TelegramNotifications";
 import { LinkedInNotifications } from "./LinkedinNotifications";

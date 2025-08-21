@@ -84,18 +84,44 @@ const TelegramMessageNotification = ({ notification, onNotificationClick }: any)
   };
 
   const getTimestamp = () => {
-    if (safeActivityData.timestamp) {
+    // 🎯 PRIORITY: Use real backend Matrix SDK timestamp (original message time)
+    // Backend now sends the original Matrix event timestamp in notification payloads
+    const backendTimestamp = safeActivityData.originalTimestamp || safeActivityData.eventTimestamp || safeActivityData.matrixTimestamp;
+    
+    if (backendTimestamp) {
       try {
         // Handle both timestamp formats (number and string)
+        const date = typeof backendTimestamp === 'number' 
+          ? new Date(backendTimestamp) 
+          : new Date(backendTimestamp);
+        
+        // Validate the date is reasonable (not in future, not too old)
+        if (date.getTime() > Date.now() + 60000) { // More than 1 minute in future
+          console.warn('[TelegramNotifications] ⚠️ Backend timestamp is in future, using fallback:', backendTimestamp);
+        } else if (date.getTime() < Date.now() - (365 * 24 * 60 * 60 * 1000)) { // More than 1 year old
+          console.warn('[TelegramNotifications] ⚠️ Backend timestamp is very old, using fallback:', backendTimestamp);
+        } else {
+          // Valid backend timestamp - this is the original message time
+          return format(date, 'MMM d, h:mm a');
+        }
+      } catch (error) {
+        console.warn('[TelegramNotifications] ❌ Invalid backend timestamp format:', backendTimestamp, error);
+      }
+    }
+    
+    // Fallback to Liveblocks timestamp only if backend timestamp is unavailable
+    if (safeActivityData.timestamp) {
+      try {
         const date = typeof safeActivityData.timestamp === 'number' 
           ? new Date(safeActivityData.timestamp) 
           : new Date(safeActivityData.timestamp);
+        console.warn('[TelegramNotifications] ⚠️ Using Liveblocks fallback timestamp instead of backend timestamp');
         return format(date, 'MMM d, h:mm a');
       } catch (error) {
-        console.warn("Invalid timestamp format:", safeActivityData.timestamp);
-        return 'Just now';
+        console.warn('[TelegramNotifications] ❌ Invalid Liveblocks timestamp format:', safeActivityData.timestamp);
       }
     }
+    
     return 'Just now';
   };
 

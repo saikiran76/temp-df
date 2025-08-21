@@ -8,6 +8,7 @@ import '@/index.css';
 import AppRoutes from '@/routes/AppRoutes';
 import ThemeProvider from '@/providers/ThemeProvider';
 import StoreProvider from '@/providers/StoreProvider';
+import QueryProvider from '@/providers/QueryProvider';
 import SessionExpiredModal from '@/components/modals/SessionExpiredModal';
 import SessionManager from '@/components/SessionManager';
 import SessionExpirationHandler from '@/components/SessionExpirationHandler';

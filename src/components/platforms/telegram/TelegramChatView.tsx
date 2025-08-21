@@ -5,6 +5,7 @@ import api from '@/utils/api';
 import { toast } from 'react-hot-toast';
 import { useSelector, useDispatch } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
+import { format } from 'date-fns';
 // import { supabase } from '@/utils/supabase';
 import logger from '@/utils/logger';
 // import { MessageBatchProcessor } from '@/utils/MessageBatchProcessor';
@@ -97,6 +98,19 @@ interface SyncState {
   processedMessages: number;
   totalMessages: number;
   errors?: Array<{ message: string; timestamp: number }>;
+  message?: string;
+  timestamp?: number;
+}
+
+interface MessageFetchState {
+  isActive: boolean;
+  status: 'checking' | 'connecting' | 'validating' | 'fetching' | 'processing' | 'saving' | 'success' | 'empty' | 'error';
+  message: string;
+  progress: number;
+  messageCount?: number;
+  duration?: number;
+  error?: string;
+  timestamp: string;
 }
 
 const ERROR_MESSAGES = {
@@ -410,6 +424,13 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }: {
 
   // 🚀 ENHANCED: Redux message selectors with caching support
   const messagesState = useSelector((state: RootState) => state.messages);
+  
+  // 🎯 NEW: Read detection state for Matrix read receipts
+  const [visibleMessages, setVisibleMessages] = useState<Set<string>>(new Set());
+  const [lastReadMessageId, setLastReadMessageId] = useState<string | null>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const messageRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const readDetectionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const messages = useSelector((state: RootState) => selectMessages(state, selectedContact?.id) || []);
   const loading = useSelector((state: RootState) => selectMessageLoading(state) || false);
   const error = useSelector((state: RootState) => selectMessageError(state) || null);
@@ -462,18 +483,28 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }: {
   
   // 🚀 NEW: Developer debug overlay state
   const [showDebugOverlay, setShowDebugOverlay] = useState(false);
+  
+  // 🚀 NEW: Background message fetch state
+  const [messageFetchState, setMessageFetchState] = useState<MessageFetchState>({
+    isActive: false,
+    status: 'checking',
+    message: '',
+    progress: 0,
+    timestamp: new Date().toISOString()
+  });
 
   // Refs
   const syncAbortController = useRef<AbortController | null>(null);
   const lastSyncRequest = useRef<any>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  // messagesContainerRef is declared above in the read detection state section (line 431)
   const messageCache = useRef(new Map());
   const isMounted = useRef(true);
   const batchProcessorRef = useRef<any>(null);
   const offlineTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastSyncRef = useRef<any>(null);
   const syncTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isLoadingRef = useRef(false); // 🚀 NEW: Track loading state to prevent infinite loops
 
   // Constants
   const PAGE_SIZE = 50;
@@ -486,6 +517,88 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }: {
       messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, []);
+
+  // 🎯 NEW: Debounced Matrix read receipt function
+  const debouncedMarkAsRead = useCallback(
+    debounce(async (messageIds: string[]) => {
+      if (!selectedContact?.id || messageIds.length === 0) return;
+      
+      try {
+        logger.info('[ChatView] 🎯 Marking messages as read via Matrix API:', {
+          contactId: selectedContact.id,
+          messageIds,
+          count: messageIds.length
+        });
+        
+        const response = await api.post('/api/v1/telegram/markAsRead', {
+          contactId: selectedContact.id,
+          messageIds
+        });
+        
+        logger.info('[ChatView] ✅ Messages marked as read:', {
+          contactId: selectedContact.id,
+          unreadCount: response.data.unreadCount
+        });
+        
+        // Update Redux state to reflect read status
+        dispatch(markMessagesAsRead({
+          contactId: selectedContact.id,
+          messageIds
+        }));
+        
+      } catch (error) {
+        logger.error('[ChatView] ❌ Failed to mark messages as read:', {
+          contactId: selectedContact.id,
+          messageIds,
+          error: error instanceof Error ? error.message : error
+        });
+      }
+    }, 1000), // 1 second debounce
+    [selectedContact?.id, dispatch]
+  );
+  
+  // 🎯 NEW: Intersection Observer for viewport-based read detection
+  const handleMessageVisibility = useCallback((messageId: string, isVisible: boolean) => {
+    if (!messageId) return;
+    
+    setVisibleMessages(prev => {
+      const newSet = new Set(prev);
+      if (isVisible) {
+        newSet.add(messageId);
+      } else {
+        newSet.delete(messageId);
+      }
+      return newSet;
+    });
+  }, []);
+  
+  // 🎯 NEW: Process visible messages for read receipts
+  useEffect(() => {
+    if (visibleMessages.size === 0 || !selectedContact?.id) return;
+    
+    // Find unread messages that are currently visible
+    const unreadVisibleMessages = messages
+      .filter(msg => {
+        const messageId = msg.message_id || msg.id;
+        return messageId && 
+               visibleMessages.has(messageId) && 
+               !msg.is_read && 
+               msg.sender_id !== currentUser?.id; // Don't mark own messages as read
+      })
+      .map(msg => msg.message_id || msg.id)
+      .filter(Boolean);
+    
+    if (unreadVisibleMessages.length > 0) {
+      logger.info('[ChatView] 👁️ Detected unread messages in viewport:', {
+        contactId: selectedContact.id,
+        visibleUnreadCount: unreadVisibleMessages.length,
+        messageIds: unreadVisibleMessages
+      });
+      
+      // Debounced call to mark as read
+      debouncedMarkAsRead(unreadVisibleMessages);
+    }
+  }, [visibleMessages, messages, selectedContact?.id, currentUser?.id, debouncedMarkAsRead]);
 
   // Helper method to check socket availability and log issues
   const checkSocketAvailability = useCallback(() => {
@@ -509,11 +622,20 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }: {
   const loadMessagesIntelligently = useCallback(async (contactId: string, forceRefresh = false) => {
     if (!contactId) return;
 
+    // 🚀 CRITICAL FIX: Prevent multiple simultaneous loads using ref
+    if (isLoadingRef.current && !forceRefresh) {
+      logger.info('[ChatView] Already loading (ref check), skipping duplicate request');
+      return;
+    }
+
     // 🚀 CRITICAL FIX: Prevent multiple simultaneous loads
     if (loading && !forceRefresh) {
       logger.info('[ChatView] Already loading, skipping duplicate request');
       return;
     }
+
+    // 🚀 Set loading flag
+    isLoadingRef.current = true;
 
     logger.info('[ChatView] 🚀 Smart message loading:', {
       contactId,
@@ -541,8 +663,9 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }: {
         processedMessages: messages.length,
         totalMessages: messages.length,
       }));
-      return;
-    }
+      isLoadingRef.current = false; // 🚀 Reset loading flag
+        return;
+      }
 
     // 🚀 CRITICAL FIX: Always show fetching state when actually loading
     logger.info('[ChatView] 📥 Loading messages from server:', { contactId });
@@ -608,8 +731,11 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }: {
         ],
       }));
       toast.error('Failed to load messages');
+    } finally {
+      // 🚀 CRITICAL: Always reset loading flag
+      isLoadingRef.current = false;
     }
-  }, [dispatch, loading, messages.length]); // 🚀 CRITICAL FIX: Simplified dependencies
+  }, [dispatch, hasCachedMessages, cacheFreshness, messages.length]); // 🚀 CRITICAL FIX: Removed loading dependency to prevent recreations
 
   // 🚀 ENHANCED: Smart message sending with optimistic updates
   const handleSendMessage = useCallback(async (message: { content: string; type?: string }) => {
@@ -845,8 +971,15 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }: {
           // 🚀 CRITICAL ENHANCEMENT: Use smart loading instead of aggressive clearing
           loadMessagesIntelligently(selectedContact.id);
         });
+    } else {
+      // 🚀 NEW: Handle non-join membership case
+      logger.info('[ChatView] Contact membership is not "join", attempting to load messages anyway:', {
+        contactId: selectedContact.id,
+        membership: selectedContact.membership
+      });
+      loadMessagesIntelligently(selectedContact.id);
     }
-  }, [dispatch, selectedContact?.id, selectedContact?.membership, loadMessagesIntelligently, hasCachedMessages, cacheFreshness, messages.length]);
+  }, [selectedContact?.id, selectedContact?.membership, hasCachedMessages, cacheFreshness?.isFresh]); // 🚀 CRITICAL FIX: Removed problematic dependencies
 
   useEffect(() => {
     if (!socket || !selectedContact?.id) return;
@@ -877,6 +1010,282 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }: {
     };
   }, [socket, selectedContact?.id, onContactUpdate, selectedContact]);
 
+  // 🚀 CRITICAL FIX: Add missing socket event handlers for background message fetch
+  useEffect(() => {
+    if (!socket || !selectedContact?.id || !currentUser?.id) return;
+
+    // Handle background message fetch progress updates
+    const handleMessagesFetching = (data: any, ack?: Function) => {
+      if (data.contactId === selectedContact.id) {
+        logger.info('[ChatView] 📊 Background message fetch progress:', {
+          contactId: data.contactId,
+          status: data.status,
+          progress: data.progress,
+          message: data.message
+        });
+        
+        setMessageFetchState({
+          isActive: true,
+          status: data.status,
+          message: data.message,
+          progress: data.progress,
+          timestamp: data.timestamp
+        });
+        
+        // Show loading toast for initial progress
+        if (data.progress === 0 && data.status === 'checking') {
+          toast.loading('Checking for new messages...', {
+            id: `fetch-${data.contactId}`,
+            duration: 10000
+          });
+        }
+      }
+      
+      // 🚀 CRITICAL FIX: Send ACK to prevent backend timeout warnings
+      if (ack) {
+        ack({ success: true, handled: data.contactId === selectedContact.id });
+      }
+    };
+
+    // Handle background message fetch completion
+    const handleMessagesFetchComplete = (data: any, ack?: Function) => {
+      if (data.contactId === selectedContact.id) {
+        logger.info('[ChatView] ✅ Background message fetch completed:', {
+          contactId: data.contactId,
+          status: data.status,
+          messageCount: data.messageCount
+        });
+        
+        // Hide progress indicator
+        setMessageFetchState({
+          isActive: false,
+          status: data.status,
+          message: data.message,
+          progress: 100,
+          messageCount: data.messageCount,
+          timestamp: data.timestamp
+        });
+        
+        // Dismiss loading toast
+        toast.dismiss(`fetch-${data.contactId}`);
+        
+        if (data.status === 'success' && data.messageCount > 0) {
+          // Show success toast
+          toast.success(`Successfully loaded ${data.messageCount} messages`);
+          
+          // 🚀 CRITICAL: Auto-refresh messages to show newly fetched content
+          dispatch(fetchMessages({ 
+            contactId: selectedContact.id, 
+            platform: 'telegram',
+            page: 0,
+            limit: 50
+          }));
+        } else if (data.status === 'empty') {
+          // Show info toast for empty conversation
+          toast('No messages found in this conversation', {
+            icon: '💬',
+            duration: 3000
+          });
+        }
+      }
+      
+      // 🚀 CRITICAL FIX: Send ACK to prevent backend timeout warnings
+      if (ack) {
+        ack({ success: true, handled: data.contactId === selectedContact.id });
+      }
+    };
+
+    // Handle background message fetch errors
+    const handleMessagesFetchFailed = (data: any, ack?: Function) => {
+      if (data.contactId === selectedContact.id) {
+        logger.error('[ChatView] ❌ Background message fetch failed:', {
+          contactId: data.contactId,
+          error: data.error
+        });
+        
+        // Hide progress indicator
+        setMessageFetchState({
+          isActive: false,
+          status: 'error',
+          message: 'Failed to fetch messages',
+          progress: 0,
+          error: data.error,
+          timestamp: data.timestamp
+        });
+        
+        // Dismiss loading toast and show error
+        toast.dismiss(`fetch-${data.contactId}`);
+        toast.error(`Failed to load messages: ${data.error}`, {
+          duration: 5000
+        });
+      }
+      
+      // 🚀 CRITICAL FIX: Send ACK to prevent backend timeout warnings
+      if (ack) {
+        ack({ success: true, handled: data.contactId === selectedContact.id });
+      }
+    };
+
+    // 🚀 NEW: Handle real-time unread count updates from Matrix read receipts
+    const handleUnreadUpdated = (data: any, ack?: Function) => {
+      logger.info('[ChatView] 📊 Received unread count update:', {
+        contactId: data.contactId,
+        unreadCount: data.unreadCount,
+        currentContactId: selectedContact.id
+      });
+      
+      // Dispatch custom event for contact list and notification badge updates
+      window.dispatchEvent(new CustomEvent('telegram:unread:updated', {
+        detail: {
+          contactId: data.contactId,
+          unreadCount: data.unreadCount
+        }
+      }));
+      
+      // If this is the current contact, update local state
+      if (data.contactId === selectedContact.id) {
+        // Update Redux state to reflect new unread count
+        dispatch(markMessagesAsRead({
+          contactId: data.contactId,
+          messageIds: [] // Empty array since backend already handled the marking
+        }));
+      }
+      
+      // 🚀 CRITICAL FIX: Send ACK to prevent backend timeout warnings
+      if (ack) {
+        ack({ success: true, handled: true });
+      }
+    };
+
+    // Register socket event handlers
+    socket.on('telegram:messages:fetching', handleMessagesFetching);
+    socket.on('telegram:messages:fetch_complete', handleMessagesFetchComplete);
+    socket.on('telegram:messages:fetch_failed', handleMessagesFetchFailed);
+    socket.on('telegram:unread:updated', handleUnreadUpdated);
+
+    return () => {
+      socket.off('telegram:messages:fetching', handleMessagesFetching);
+      socket.off('telegram:messages:fetch_complete', handleMessagesFetchComplete);
+      socket.off('telegram:messages:fetch_failed', handleMessagesFetchFailed);
+      socket.off('telegram:unread:updated', handleUnreadUpdated);
+    };
+  }, [socket, selectedContact?.id, currentUser?.id, dispatch]);
+
+  // 🎯 NEW: Viewport-based read detection with backend API integration
+  const markVisibleMessagesAsRead = useCallback(debounce(async (visibleMessageIds: string[]) => {
+    if (!selectedContact?.id || !currentUser?.id || visibleMessageIds.length === 0) {
+      return;
+    }
+
+    try {
+      logger.info('[ChatView] 📖 Marking messages as read:', {
+        contactId: selectedContact.id,
+        messageIds: visibleMessageIds,
+        count: visibleMessageIds.length
+      });
+
+      // Call backend API to mark messages as read with Matrix SDK integration
+      const response = await api.post('/api/v1/telegram/markAsRead', {
+        contactId: selectedContact.id,
+        messageIds: visibleMessageIds
+      });
+
+      if (response.data?.success) {
+        logger.info('[ChatView] ✅ Messages marked as read successfully:', {
+          contactId: selectedContact.id,
+          unreadCount: response.data.unreadCount
+        });
+
+        // Update local Redux state
+        dispatch(markMessagesAsRead({
+          contactId: selectedContact.id,
+          messageIds: visibleMessageIds
+        }));
+
+        // Update last read message ID
+        const latestMessageId = visibleMessageIds[visibleMessageIds.length - 1];
+        setLastReadMessageId(latestMessageId);
+      }
+    } catch (error: any) {
+      logger.error('[ChatView] ❌ Failed to mark messages as read:', {
+        error: error.message,
+        contactId: selectedContact.id,
+        messageIds: visibleMessageIds
+      });
+      // Don't show toast error for read receipts to avoid user annoyance
+    }
+  }, 1000), [selectedContact?.id, currentUser?.id, dispatch]);
+
+  // 🎯 NEW: Intersection Observer for viewport-based read detection
+  useEffect(() => {
+    if (!messagesContainerRef.current || messages.length === 0) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const newVisibleMessages = new Set(visibleMessages);
+        let hasChanges = false;
+
+        entries.forEach((entry) => {
+          const messageElement = entry.target as HTMLElement;
+          const messageId = messageElement.dataset.messageId;
+          
+          if (!messageId) return;
+
+          if (entry.isIntersecting && entry.intersectionRatio >= 0.5) {
+            // Message is visible (at least 50% in viewport)
+            if (!newVisibleMessages.has(messageId)) {
+              newVisibleMessages.add(messageId);
+              hasChanges = true;
+            }
+          } else {
+            // Message is not visible
+            if (newVisibleMessages.has(messageId)) {
+              newVisibleMessages.delete(messageId);
+              hasChanges = true;
+            }
+          }
+        });
+
+        if (hasChanges) {
+          setVisibleMessages(newVisibleMessages);
+          
+          // Debounced API call to mark visible messages as read
+          const visibleMessageIds = Array.from(newVisibleMessages);
+          if (visibleMessageIds.length > 0) {
+            markVisibleMessagesAsRead(visibleMessageIds);
+          }
+        }
+      },
+      {
+        root: messagesContainerRef.current,
+        rootMargin: '0px',
+        threshold: [0, 0.5, 1.0] // Trigger at 0%, 50%, and 100% visibility
+      }
+    );
+
+    // Observe all message elements
+    const messageElements = messagesContainerRef.current.querySelectorAll('[data-message-id]');
+    messageElements.forEach((element) => {
+      observer.observe(element);
+    });
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [messages, visibleMessages, markVisibleMessagesAsRead]);
+
+  // 🎯 NEW: Cleanup read detection timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (readDetectionTimeoutRef.current) {
+        clearTimeout(readDetectionTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  // 🚀 CRITICAL FIX: Add missing socket event handlers for background message fetch
   useEffect(() => {
     if (!socket || !selectedContact?.id || !currentUser?.id) {
       logger.info('[ChatView] Socket or contact not ready:', {
@@ -942,7 +1351,13 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }: {
             message_type: 'text',
             // 🔥 CRITICAL FIX: Use isOutgoing flag from Enhanced Event Listener
             is_outgoing: payload.isOutgoing || payload.isOwnMessage || false,
-            isOwnMessage: payload.isOwnMessage || payload.isOutgoing || false
+            isOwnMessage: payload.isOwnMessage || payload.isOutgoing || false,
+            // 🚀 CRITICAL FIX: Also store in metadata for consistency
+            metadata: {
+              direction: (payload.isOutgoing || payload.isOwnMessage) ? 'outgoing' : 'incoming',
+              isOutgoing: payload.isOutgoing || payload.isOwnMessage || false,
+              source: 'enhanced_event_listener'
+            }
           };
 
           if (!processedMessageIds.has(messageData.id)) {
@@ -1025,16 +1440,125 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }: {
     socket.off('telegram:message:update');
     socket.off('room:joined');
     socket.off('room:error');
+    // 🚀 NEW: Clean up background message fetch events
+    socket.off('telegram:messages:fetching');
+    socket.off('telegram:messages:fetch_complete');
+    socket.off('telegram:messages:fetch_failed');
+
+    // 🚀 NEW: Background message fetch event handlers
+    const handleMessagesFetching = (data: any) => {
+      if (data.contactId === selectedContact?.id) {
+        logger.info('[ChatView] 🚀 Background message fetch progress:', {
+          contactId: data.contactId,
+          status: data.status,
+          progress: data.progress,
+          message: data.message
+        });
+        
+        setMessageFetchState({
+          isActive: true,
+          status: data.status,
+          message: data.message,
+          progress: data.progress,
+          timestamp: data.timestamp
+        });
+        
+        // Show user-friendly toast for initial fetch
+        if (data.progress === 0 && data.status === 'checking') {
+          toast.loading('Checking for new messages...', {
+            id: `fetch-${data.contactId}`,
+            duration: 10000
+          });
+        }
+      }
+    };
+    
+    const handleMessagesFetchComplete = (data: any) => {
+      if (data.contactId === selectedContact?.id) {
+        logger.info('[ChatView] ✅ Background message fetch completed:', {
+          contactId: data.contactId,
+          status: data.status,
+          messageCount: data.messageCount,
+          duration: data.duration
+        });
+        
+        setMessageFetchState({
+          isActive: false,
+          status: data.status,
+          message: data.message,
+          progress: 100,
+          messageCount: data.messageCount,
+          duration: data.duration,
+          timestamp: data.timestamp
+        });
+        
+        // Dismiss loading toast and show success
+        toast.dismiss(`fetch-${data.contactId}`);
+        
+        if (data.status === 'success' && data.messageCount > 0) {
+          toast.success(`Successfully loaded ${data.messageCount} messages`, {
+            duration: 3000
+          });
+          
+          // Refresh messages to show newly fetched content
+          dispatch(fetchMessages({ 
+            contactId: selectedContact.id, 
+            platform: 'telegram',
+            page: 0,
+            limit: 50
+          }));
+        } else if (data.status === 'empty') {
+          toast('No messages found in this conversation', {
+            icon: '📭',
+            duration: 2000
+          });
+        }
+      }
+    };
+    
+    const handleMessagesFetchFailed = (data: any) => {
+      if (data.contactId === selectedContact?.id) {
+        logger.error('[ChatView] ❌ Background message fetch failed:', {
+          contactId: data.contactId,
+          error: data.error,
+          duration: data.duration
+        });
+        
+        setMessageFetchState({
+          isActive: false,
+          status: 'error',
+          message: `Failed to fetch messages: ${data.error}`,
+          progress: 0,
+          error: data.error,
+          duration: data.duration,
+          timestamp: data.timestamp
+        });
+        
+        // Dismiss loading toast and show error
+        toast.dismiss(`fetch-${data.contactId}`);
+        toast.error(`Failed to load messages: ${data.error}`, {
+          duration: 5000
+        });
+      }
+    };
 
     // 🚀 CRITICAL FIX: Listen for both traditional and enhanced events
     socket.on('telegram:message', handleNewMessage); // Traditional events (if any)
     socket.on('telegram:message_received', handleNewMessage); // 🚀 NEW: Enhanced event listener events
     socket.on('telegram:message:update', handleMessageUpdate);
+    // 🚀 NEW: Background message fetch events
+    socket.on('telegram:messages:fetching', handleMessagesFetching);
+    socket.on('telegram:messages:fetch_complete', handleMessagesFetchComplete);
+    socket.on('telegram:messages:fetch_failed', handleMessagesFetchFailed);
 
     return () => {
       socket.off('telegram:message', handleNewMessage);
       socket.off('telegram:message_received', handleNewMessage); // 🚀 NEW: Clean up enhanced events
       socket.off('telegram:message:update', handleMessageUpdate);
+      // 🚀 NEW: Clean up background message fetch events
+      socket.off('telegram:messages:fetching', handleMessagesFetching);
+      socket.off('telegram:messages:fetch_complete', handleMessagesFetchComplete);
+      socket.off('telegram:messages:fetch_failed', handleMessagesFetchFailed);
     };
   }, [socket, selectedContact?.id, dispatch, currentPage, scrollToBottom, currentUser?.id]);
 
@@ -1213,6 +1737,10 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }: {
     }
   }, [selectedContact]);
 
+  // 🚀 REMOVED: Immediate read marking on chat open
+  // This was causing notification badges to disappear immediately, which is incorrect UX.
+  // Messages should only be marked as read when actually viewed in viewport.
+
   const handlePriorityChange = (priority: 'low' | 'medium' | 'high') => {
     if (!selectedContact) return;
 
@@ -1247,6 +1775,54 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }: {
         return null;
     }
   }, [connectionStatus]);
+
+  // 🚀 FIXED: Move useMemo and useCallback BEFORE renderMessages to fix React hooks violation
+  const groupedMessages = useMemo(() => {
+    const groups: { [key: string]: typeof messages } = {};
+    
+    messages.forEach(message => {
+      try {
+        const messageDate = new Date(message.timestamp);
+        const dateKey = format(messageDate, 'yyyy-MM-dd');
+        
+        if (!groups[dateKey]) {
+          groups[dateKey] = [];
+        }
+        groups[dateKey].push(message);
+      } catch (error) {
+        console.warn('[TelegramChatView] Invalid message timestamp:', message.timestamp);
+        // Add to "unknown" group
+        if (!groups['unknown']) {
+          groups['unknown'] = [];
+        }
+        groups['unknown'].push(message);
+      }
+    });
+    
+    return groups;
+  }, [messages]);
+
+  // 🚀 FIXED: Move getDateLabel BEFORE renderMessages to fix React hooks violation
+  const getDateLabel = useCallback((dateKey: string) => {
+    if (dateKey === 'unknown') return 'Unknown Date';
+    
+    try {
+      const date = new Date(dateKey);
+      const today = new Date();
+      const yesterday = new Date();
+      yesterday.setDate(today.getDate() - 1);
+      
+      if (format(date, 'yyyy-MM-dd') === format(today, 'yyyy-MM-dd')) {
+        return 'Today';
+      } else if (format(date, 'yyyy-MM-dd') === format(yesterday, 'yyyy-MM-dd')) {
+        return 'Yesterday';
+      } else {
+        return format(date, 'MMM dd, yyyy');
+      }
+    } catch (error) {
+      return dateKey;
+    }
+  }, []);
 
   const renderMessages = useCallback(() => {
     // 🚀 CRITICAL FIX: Show loading only when actually loading, not when we have messages
@@ -1288,12 +1864,24 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }: {
     if (messages.length > 0) {
       return (
         <div className="space-y-2">
-          {messages.map((message: Message) => (
-            <MessageItem
-              key={`${message.id}_${message.message_id}_${message.timestamp}`}
-              message={message}
-            />
-          ))}
+          {Object.keys(groupedMessages)
+            .sort((a, b) => {
+              if (a === 'unknown') return 1;
+              if (b === 'unknown') return -1;
+              return new Date(a).getTime() - new Date(b).getTime();
+            })
+            .map(dateKey => (
+              <React.Fragment key={dateKey}>
+                {groupedMessages[dateKey].map((message: Message, index: number) => (
+                  <MessageItem
+                    key={`${message.id}_${message.message_id}_${message.timestamp}`}
+                    message={message}
+                    showDateSeparator={index === 0} // Show date separator only on first message of the day
+                    dateLabel={getDateLabel(dateKey)}
+                  />
+                ))}
+              </React.Fragment>
+            ))}
         </div>
       );
     }
@@ -1304,7 +1892,7 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }: {
         <LoadingChatView details={syncState.details} />
       </div>
     );
-  }, [loadingState, messages, currentUser, syncState.details]);
+  }, [loadingState, messages, syncState.details, groupedMessages, getDateLabel]);
 
   const renderAvatar = () => {
     return (
@@ -1467,11 +2055,24 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }: {
             <h2 className="font-medium">{selectedContact?.display_name || 'Unknown'}</h2>
             <div className="flex items-center space-x-2 text-xs text-muted-foreground">
               {renderConnectionStatus()}
-              {/* Priority Badge replacing dropdown */}
+              
+              {/* 🚀 NEW: Background message fetch progress indicator */}
+              {messageFetchState.isActive && (
+                <div className="flex items-center space-x-2 bg-blue-500/10 px-2 py-1 rounded-md">
+                  <div className="w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                  <span className="text-blue-400 font-medium text-xs">
+                    {messageFetchState.message}
+                  </span>
+                  <span className="text-blue-300 text-xs">
+                    {messageFetchState.progress}%
+                  </span>
+                </div>
+              )}
+              
+              {/* Priority Badge */}
               <PriorityBadge 
                 priority={priority || selectedContact?.metadata?.priority || 'medium'} 
                 onClick={() => {
-                  // Cycle through priorities: low -> medium -> high -> low
                   const currentPriority = priority || selectedContact?.metadata?.priority || 'medium';
                   const nextPriority = currentPriority === 'low' ? 'medium' : 
                                       currentPriority === 'medium' ? 'high' : 'low';

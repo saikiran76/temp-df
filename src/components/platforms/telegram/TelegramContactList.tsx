@@ -55,6 +55,20 @@ import {
 const MAX_RETRIES = 3;
 const INITIAL_RETRY_DELAY = 1000;
 
+// 🚀 NEW: Enhanced contact sync state interface
+interface ContactSyncState {
+  isActive: boolean;
+  status: 'idle' | 'connecting' | 'fetching' | 'processing' | 'validating' | 'caching' | 'complete' | 'error' | 'timeout';
+  message: string;
+  progress: number;
+  contactsFound?: number;
+  contactsProcessed?: number;
+  duration?: number;
+  error?: string;
+  timestamp: string;
+  showInHeader: boolean;
+}
+
 // Update the ShimmerContactList component with more visible styling
 const ShimmerContactList = () => (
   <div className="space-y-4 p-4 bg-background h-full min-h-[300px]">
@@ -156,9 +170,10 @@ interface ContactItemProps {
   onClick: () => void;
   isSelected: boolean;
   notificationCount?: number;
+  isLoading?: boolean; // 🚀 CRITICAL UX FIX: Add loading state prop
 }
 
-const ContactItem = memo(({ contact, onClick, isSelected, notificationCount }: ContactItemProps) => {
+const ContactItem = memo(({ contact, onClick, isSelected, notificationCount, isLoading = false }: ContactItemProps) => {
   const dispatch = useDispatch<AppDispatch>();
   const priority = useSelector((state: RootState) => selectContactPriority(state, contact.id));
   const [isEditing, setIsEditing] = useState(false);
@@ -257,9 +272,11 @@ const ContactItem = memo(({ contact, onClick, isSelected, notificationCount }: C
       <div
         className={`p-4 rounded-lg mb-2 bg-card hover:bg-accent shadow-md cursor-pointer transition-all duration-200 border border-border hover:border-primary/20 relative ${
           isSelected ? 'bg-accent' : ''
-        } ${isDeleting ? 'opacity-50 pointer-events-none' : ''}`}
-        onClick={onClick}
-        onMouseEnter={() => !isDeleting && setShowTooltip(true)}
+        } ${isDeleting ? 'opacity-50 pointer-events-none' : ''} ${
+          isLoading ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800 animate-pulse' : ''
+        }`}
+        onClick={isLoading ? undefined : onClick}
+        onMouseEnter={() => !isDeleting && !isLoading && setShowTooltip(true)}
         onMouseLeave={() => setShowTooltip(false)}
       >
         {showTooltip && !isDeleting && (
@@ -308,7 +325,15 @@ const ContactItem = memo(({ contact, onClick, isSelected, notificationCount }: C
         )}
         
         <div className="flex items-center gap-3">
-          <ContactAvatar contact={contact} />
+          <div className="relative">
+            <ContactAvatar contact={contact} />
+            {/* 🚀 CRITICAL UX FIX: Show loading spinner on avatar when loading */}
+            {isLoading && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/20 rounded-full">
+                <Loader2 className="h-5 w-5 animate-spin text-blue-500" />
+              </div>
+            )}
+          </div>
           <div className="flex-1 min-w-0">
             {isEditing ? (
               <Input
@@ -495,6 +520,91 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }: TelegramCon
   const loading = useSelector((state: RootState) => state.contacts.loading);
   const error = useSelector((state: RootState) => state.contacts.error);
   
+  // 🚀 CRITICAL UX FIX: Add loading state for contact selection
+  const [loadingContactId, setLoadingContactId] = useState<number | null>(null);
+  const [contactLoadingStates, setContactLoadingStates] = useState<Record<number, boolean>>({});
+  
+  // 🚀 CRITICAL UX FIX: Enhanced contact selection with immediate loading feedback
+  const handleContactSelectWithFeedback = useCallback(async (contact: any) => {
+    if (!contact || contactLoadingStates[contact.id]) {
+      return; // Prevent double-clicks and invalid selections
+    }
+    
+    logger.info('[TelegramContactList] Contact selected with immediate loading feedback:', {
+      contactId: contact.id,
+      displayName: contact.display_name,
+      membership: contact.membership
+    });
+    
+    // 🎯 IMMEDIATE FEEDBACK: Set loading state instantly
+    setLoadingContactId(contact.id);
+    setContactLoadingStates(prev => ({ ...prev, [contact.id]: true }));
+    
+    // 🎯 IMMEDIATE FEEDBACK: Show loading toast
+    const loadingToastId = toast.loading(
+      `Opening chat with ${contact.display_name}...`,
+      {
+        duration: 10000, // Will be dismissed when chat loads
+        style: {
+          background: '#3B82F6',
+          color: '#ffffff',
+          border: 'none',
+          borderRadius: '8px',
+          boxShadow: '0 4px 12px rgba(59, 130, 246, 0.15)',
+        },
+      }
+    );
+    
+    try {
+      // Call the parent's onContactSelect function
+      await onContactSelect(contact);
+      
+      // 🎯 SUCCESS FEEDBACK: Dismiss loading toast and show success
+      toast.dismiss(loadingToastId);
+      toast.success(
+        `Chat with ${contact.display_name} opened successfully!`,
+        {
+          duration: 2000,
+          style: {
+            background: '#10B981',
+            color: '#ffffff',
+            border: 'none',
+            borderRadius: '8px',
+            boxShadow: '0 4px 12px rgba(16, 185, 129, 0.15)',
+          },
+        }
+      );
+      
+    } catch (error) {
+      // 🎯 ERROR FEEDBACK: Show error message
+      toast.dismiss(loadingToastId);
+      toast.error(
+        `Failed to open chat with ${contact.display_name}. Please try again.`,
+        {
+          duration: 5000,
+          style: {
+            background: '#EF4444',
+            color: '#ffffff',
+            border: 'none',
+            borderRadius: '8px',
+            boxShadow: '0 4px 12px rgba(239, 68, 68, 0.15)',
+          },
+        }
+      );
+      
+      logger.error('[TelegramContactList] Error selecting contact:', {
+        contactId: contact.id,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    } finally {
+      // 🎯 CLEANUP: Clear loading states
+      setTimeout(() => {
+        setLoadingContactId(null);
+        setContactLoadingStates(prev => ({ ...prev, [contact.id]: false }));
+      }, 1000); // Small delay to prevent flickering
+    }
+  }, [onContactSelect, contactLoadingStates]);
+  
   // CRITICAL FIX: Get the actual priorityMap from Redux state
   const priorityMap = useSelector((state: RootState) => state.contacts.priorityMap);
 
@@ -528,10 +638,188 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }: TelegramCon
   });
   const [showPriorityFilter, setShowPriorityFilter] = useState(false);
   const [sortBy, setSortBy] = useState('activity'); // 'activity', 'priority', 'name'
+  
+  // 🚀 NEW: Enhanced contact sync state interface
+  const [contactSyncState, setContactSyncState] = useState<ContactSyncState>({
+    isActive: false,
+    status: 'idle',
+    message: '',
+    progress: 0,
+    timestamp: new Date().toISOString(),
+    showInHeader: false
+  });
+  
+  // 🚀 CRITICAL FIX: Reset contact sync state on component mount
+  useEffect(() => {
+    logger.info('[TelegramContactList] 🔄 Resetting contact sync state on mount');
+    setContactSyncState({
+      isActive: false,
+      status: 'idle',
+      message: '',
+      progress: 0,
+      timestamp: new Date().toISOString(),
+      showInHeader: false
+    });
+    setSyncProgress(null);
+  }, []);
+  
+  // 🚀 CRITICAL FIX: Auto-reset sync state if stuck for too long
+  useEffect(() => {
+    if (contactSyncState.isActive) {
+      const timeout = setTimeout(() => {
+        logger.warn('[TelegramContactList] ⏰ Contact sync timeout - resetting state');
+        setContactSyncState(prev => ({
+          ...prev,
+          isActive: false,
+          status: 'timeout',
+          message: 'Sync timed out',
+          showInHeader: false
+        }));
+        setSyncProgress(null);
+        toast.dismiss('contact-sync');
+        toast.error('Contact sync timed out. Please try refreshing.', {
+          duration: 5000
+        });
+      }, 30000); // 30 second timeout
+      
+      return () => clearTimeout(timeout);
+    }
+  }, [contactSyncState.isActive]);
   const [forceRefreshKey, setForceRefreshKey] = useState(0); // CRITICAL FIX: Force refresh key for real-time updates
+
+  // 🚀 NEW: Matrix-based unread count state for real-time read receipt sync
+  const [matrixUnreadCounts, setMatrixUnreadCounts] = useState<Record<string, number>>({});
+  const [unreadCountsLoading, setUnreadCountsLoading] = useState(false);
+  // 🛡️ CIRCUIT BREAKER: Disable polling if endpoint missing or unstable
+  const [apiCircuitOpen, setApiCircuitOpen] = useState(false);
+  const [apiFailCount, setApiFailCount] = useState(0);
+  
+  // 🎯 RETRY CONTROL: Add delays between failed attempts to reduce spam
+  const [lastRetryTime, setLastRetryTime] = useState<number>(0);
+  const RETRY_DELAY = 5000; // 5 seconds between retries
+  
+  // 🎯 NEW: Load Matrix unread counts from backend API with retry delay
+  const loadUnreadCounts = useCallback(async () => {
+    if (unreadCountsLoading || !session?.user?.id || apiCircuitOpen) return;
+    
+    // 🎯 RETRY CONTROL: Add delay between retries to reduce spam
+    const now = Date.now();
+    if (lastRetryTime > 0 && (now - lastRetryTime) < RETRY_DELAY) {
+      logger.debug('[TelegramContactList] ⏳ Skipping API call - too soon since last attempt', {
+        timeUntilNextRetry: Math.round((RETRY_DELAY - (now - lastRetryTime)) / 1000)
+      });
+      return;
+    }
+
+    try {
+      setUnreadCountsLoading(true);
+      setLastRetryTime(now);
+      logger.info('[TelegramContactList] 📊 Loading initial Matrix unread counts from backend');
+      
+      const response = await api.get('/api/v1/telegram/unreadCounts');
+      
+      if (response.data && typeof response.data === 'object') {
+        logger.info('[TelegramContactList] ✅ Loaded Matrix unread counts:', {
+          counts: response.data,
+          totalContacts: Object.keys(response.data.unreadCounts || response.data).length
+        });
+        
+        // Support both { unreadCounts } and plain map response shapes
+        const counts = response.data.unreadCounts || response.data;
+        setMatrixUnreadCounts(counts);
+        
+        // Force refresh the contact list to reflect new counts
+        setForceRefreshKey(prev => prev + 1);
+      } else {
+        logger.warn('[TelegramContactList] ⚠️ Invalid unread counts response format:', response.data);
+      }
+    } catch (error: any) {
+      const status = error.response?.status;
+      const statusText = error.response?.statusText;
+      const nextFailCount = apiFailCount + 1;
+      setApiFailCount(nextFailCount);
+      
+      if (status === 404) {
+        logger.warn('[TelegramContactList] ⚠️ Endpoint not found - likely not deployed to production yet', {
+          status,
+          statusText,
+          error: error.message
+        });
+        if (!apiCircuitOpen) {
+          setApiCircuitOpen(true);
+          logger.warn('[TelegramContactList] 🛑 Disabling unreadCounts polling (circuit open) due to 404. Falling back to socket-only updates.');
+        }
+      } else if (status === 401) {
+        logger.warn('[TelegramContactList] 🔐 Authentication failed - checking token validity', {
+          status,
+          statusText,
+          error: error.message,
+          hasSession: !!session,
+          hasToken: !!session?.accessToken
+        });
+      } else {
+        logger.error('[TelegramContactList] ❌ Failed to load Matrix unread counts:', {
+          status,
+          statusText,
+          error: error.message,
+          response: error.response?.data
+        });
+        if (nextFailCount >= 3 && !apiCircuitOpen) {
+          setApiCircuitOpen(true);
+          logger.warn('[TelegramContactList] 🛑 Disabling unreadCounts polling after repeated failures. Falling back to socket-only updates.');
+        }
+      }
+      // Don't show toast error for unread counts to avoid user annoyance
+    } finally {
+      setUnreadCountsLoading(false);
+    }
+  }, [session?.user?.id, unreadCountsLoading, lastRetryTime, apiCircuitOpen]);
+  
+  // 🚀 NEW: Load unread counts on component mount and when contacts change
+  useEffect(() => {
+    if (session?.user?.id && contacts.length > 0 && !apiCircuitOpen) {
+      // Small delay to ensure contacts are loaded
+      const timeout = setTimeout(() => {
+        loadUnreadCounts();
+      }, 500);
+      
+      return () => clearTimeout(timeout);
+    }
+  }, [session?.user?.id, contacts.length, apiCircuitOpen, loadUnreadCounts]);
+  
+  // 🚀 NEW: Listen for Matrix read receipt updates from TelegramChatView
+  useEffect(() => {
+    const handleUnreadUpdated = (event: CustomEvent) => {
+      const { contactId, unreadCount } = event.detail;
+      
+      logger.info('[TelegramContactList] 📊 Received Matrix unread count update:', {
+        contactId,
+        unreadCount,
+        previousCount: matrixUnreadCounts[contactId] || 0
+      });
+      
+      // Update Matrix-based unread counts
+      setMatrixUnreadCounts(prev => ({
+        ...prev,
+        [contactId]: unreadCount
+      }));
+      
+      // Force refresh the contact list to reflect new counts
+      setForceRefreshKey(prev => prev + 1);
+    };
+    
+    // Listen for custom events from TelegramChatView
+    window.addEventListener('telegram:unread:updated', handleUnreadUpdated as EventListener);
+    
+    return () => {
+      window.removeEventListener('telegram:unread:updated', handleUnreadUpdated as EventListener);
+    };
+  }, [matrixUnreadCounts]);
 
   const unreadNotificationCounts = useMemo(() => {
     const counts: Record<string, number> = {};
+    
+    // Combine Liveblocks notifications with Matrix-based unread counts
     if (inboxNotifications) {
       for (const notification of inboxNotifications) {
         if (!notification.readAt && "subjectId" in notification && notification.subjectId) {
@@ -539,8 +827,18 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }: TelegramCon
         }
       }
     }
+    
+    // 🚀 PRIORITY: Matrix-based counts override Liveblocks for accuracy
+    // Matrix read receipts are the source of truth for read/unread status
+    Object.keys(matrixUnreadCounts).forEach(contactId => {
+      const matrixCount = matrixUnreadCounts[contactId];
+      if (matrixCount !== undefined) {
+        counts[contactId] = matrixCount;
+      }
+    });
+    
     return counts;
-  }, [inboxNotifications, forceRefreshKey]); // CRITICAL FIX: Add forceRefreshKey to dependencies
+  }, [inboxNotifications, matrixUnreadCounts, forceRefreshKey]); // CRITICAL FIX: Add matrixUnreadCounts to dependencies
 
   // CRITICAL FIX: Track processed messages to prevent duplicates
   const processedMessageIds = useRef(new Set<string>());
@@ -1162,34 +1460,148 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }: TelegramCon
           return;
         }
 
-        const handleSyncProgress = (data) => {
+        const handleSyncProgress = (data, ack?: Function) => {
           if (data.userId === session.user.id) {
+            logger.info('[TelegramContactList] 🚀 Background contact sync progress:', {
+              progress: data.progress,
+              details: data.details,
+              contactsFound: data.contactsFound,
+              contactsProcessed: data.contactsProcessed
+            });
+            
+            // Update legacy sync progress for existing UI
             setSyncProgress({
               state: SYNC_STATES.SYNCING,
               progress: data.progress,
               message: data.details || 'Syncing contacts...'
             });
+            
+            // 🚀 NEW: Enhanced contact sync state with detailed feedback
+            setContactSyncState({
+              isActive: true,
+              status: data.progress < 25 ? 'connecting' : 
+                     data.progress < 50 ? 'fetching' :
+                     data.progress < 75 ? 'processing' :
+                     data.progress < 90 ? 'validating' : 'caching',
+              message: data.details || 'Syncing contacts...',
+              progress: data.progress,
+              contactsFound: data.contactsFound,
+              contactsProcessed: data.contactsProcessed,
+              timestamp: new Date().toISOString(),
+              showInHeader: true
+            });
+            
+            // Show user-friendly toast for initial sync
+            if (data.progress === 0 || data.progress <= 10) {
+              toast.loading('Looking for new contacts...', {
+                id: 'contact-sync',
+                duration: 15000
+              });
+            }
+          }
+          
+          // 🚀 CRITICAL FIX: Send ACK to prevent backend timeout warnings
+          if (ack) {
+            ack({ success: true, handled: data.userId === session.user.id });
           }
         };
 
-        const handleSyncComplete = (data) => {
+        const handleSyncComplete = (data, ack?: Function) => {
           if (data.userId === session.user.id) {
+            logger.info('[TelegramContactList] ✅ Background contact sync completed:', {
+              contactsFound: data.contactsFound,
+              contactsProcessed: data.contactsProcessed,
+              duration: data.duration,
+              newContacts: data.newContacts
+            });
+            
+            // Update legacy sync progress
             setSyncProgress(null);
+            
+            // 🚀 NEW: Enhanced contact sync completion feedback
+            setContactSyncState({
+              isActive: false,
+              status: 'complete',
+              message: data.contactsFound > 0 ? 
+                `Successfully synced ${data.contactsFound} contacts` :
+                'Contact sync complete - no new contacts found',
+              progress: 100,
+              contactsFound: data.contactsFound,
+              contactsProcessed: data.contactsProcessed,
+              duration: data.duration,
+              timestamp: new Date().toISOString(),
+              showInHeader: false
+            });
+            
+            // Dismiss loading toast and show success
+            toast.dismiss('contact-sync');
+            
+            if (data.contactsFound > 0) {
+              toast.success(`Found ${data.contactsFound} contacts! ${data.newContacts > 0 ? `${data.newContacts} new` : 'All up to date'}`, {
+                duration: 4000,
+                icon: '🎉'
+              });
+            } else {
+              toast('Contact sync complete - no new contacts found', {
+                duration: 2000,
+                icon: '📭'
+              });
+            }
+            
             // Only reload if we're the active platform
             const activePlatform = localStorage.getItem('dailyfix_active_platform');
             if (activePlatform === 'telegram') {
               loadContactsWithRetry();
             }
+            
+            // Hide sync state after a delay
+            setTimeout(() => {
+              setContactSyncState(prev => ({ ...prev, showInHeader: false }));
+            }, 3000);
+          }
+          
+          // 🚀 CRITICAL FIX: Send ACK to prevent backend timeout warnings
+          if (ack) {
+            ack({ success: true, handled: data.userId === session.user.id });
           }
         };
 
-        const handleSyncError = (data) => {
+        const handleSyncError = (data, ack?: Function) => {
           if (data.userId === session.user.id) {
+            logger.error('[TelegramContactList] ❌ Background contact sync failed:', {
+              error: data.error,
+              duration: data.duration,
+              contactsProcessed: data.contactsProcessed
+            });
+            
+            // Update legacy sync progress
             setSyncProgress({
               state: SYNC_STATES.REJECTED,
               message: data.error || 'Sync failed'
             });
-            toast.error('Contact sync failed: ' + (data.error || 'Unknown error'));
+            
+            // 🚀 NEW: Enhanced contact sync error feedback
+            setContactSyncState({
+              isActive: false,
+              status: 'error',
+              message: `Contact sync failed: ${data.error || 'Unknown error'}`,
+              progress: 0,
+              error: data.error,
+              duration: data.duration,
+              timestamp: new Date().toISOString(),
+              showInHeader: false
+            });
+            
+            // Dismiss loading toast and show error
+            toast.dismiss('contact-sync');
+            toast.error(`Contact sync failed: ${data.error || 'Unknown error'}`, {
+              duration: 6000
+            });
+            
+            // Hide sync state after a delay
+            setTimeout(() => {
+              setContactSyncState(prev => ({ ...prev, showInHeader: false }));
+            }, 5000);
           }
         };
 
@@ -1806,14 +2218,173 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }: TelegramCon
       }
     };
 
+    // Handle telegram error events (CONTACT_REMOVED, etc.)
+    const handleTelegramError = (event: CustomEvent) => {
+      const { type, contactId, userFeedback, timestamp } = event.detail;
+      
+      logger.info('[telegramContactList] Received telegram error event:', {
+        type,
+        contactId,
+        userFeedback: userFeedback?.title,
+        timestamp
+      });
+      
+      if (type === 'CONTACT_REMOVED' && contactId) {
+        // Remove contact from Redux state
+        dispatch(hideContact(contactId));
+        
+        // Show user-friendly toast with action buttons
+        const toastId = toast(
+          (t) => (
+            <div className="flex flex-col space-y-2">
+              <div className="flex items-start space-x-2">
+                <div className="flex-1">
+                  <h4 className="font-medium text-sm">{userFeedback?.title || 'Contact Removed'}</h4>
+                  <p className="text-sm text-gray-600 mt-1">
+                    {userFeedback?.message || 'This contact is no longer accessible.'}
+                  </p>
+                </div>
+                <button
+                  onClick={() => toast.dismiss(t.id)}
+                  className="text-gray-400 hover:text-gray-600 transition-colors"
+                >
+                  ×
+                </button>
+              </div>
+              {userFeedback?.actions && userFeedback.actions.length > 0 && (
+                <div className="flex space-x-2 pt-2 border-t border-gray-200">
+                  {userFeedback.actions.map((action, index) => (
+                    <button
+                      key={index}
+                      onClick={() => {
+                        handleErrorAction(action, contactId);
+                        toast.dismiss(t.id);
+                      }}
+                      className={`px-3 py-1 text-xs rounded transition-colors ${
+                        action.primary
+                          ? 'bg-blue-500 text-white hover:bg-blue-600'
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      {action.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          ),
+          {
+            duration: userFeedback?.autoRemove ? (userFeedback.timeout || 5000) : Infinity,
+            style: {
+              background: '#ffffff',
+              color: '#374151',
+              border: '1px solid #e5e7eb',
+              borderRadius: '8px',
+              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
+              maxWidth: '400px',
+            },
+          }
+        );
+      } else if (userFeedback) {
+        // Handle other error types with appropriate styling
+        const toastType = userFeedback.type === 'error' ? 'error' : 
+                         userFeedback.type === 'warning' ? 'error' : 'info';
+        
+        const toastStyle = {
+          background: userFeedback.type === 'error' ? '#EF4444' : 
+                     userFeedback.type === 'warning' ? '#F59E0B' : '#3B82F6',
+          color: '#ffffff',
+          border: 'none',
+          borderRadius: '8px',
+          boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+        };
+        
+        if (toastType === 'error') {
+          toast.error(userFeedback.message, {
+            duration: userFeedback.autoRemove ? (userFeedback.timeout || 5000) : 6000,
+            style: toastStyle,
+          });
+        } else {
+          toast(userFeedback.message, {
+            duration: userFeedback.autoRemove ? (userFeedback.timeout || 5000) : 4000,
+            style: toastStyle,
+          });
+        }
+      }
+    };
+
+    // Handle error action buttons
+    const handleErrorAction = (action: any, contactId?: number) => {
+      logger.info('[telegramContactList] Handling error action:', {
+        handler: action.handler,
+        contactId,
+        data: action.data
+      });
+      
+      switch (action.handler) {
+        case 'refreshContacts':
+          if (session?.user?.id) {
+            logger.info('[telegramContactList] Refreshing contacts due to error action');
+            dispatch(freshSyncContacts({
+              userId: session.user.id,
+              platform: 'telegram'
+            }));
+          }
+          break;
+          
+        case 'navigateBack':
+          // Navigate back to contact list if in chat view
+          if (selectedContactId) {
+            onContactSelect(null);
+          }
+          break;
+          
+        case 'removeContact':
+          if (contactId) {
+            dispatch(hideContact(contactId));
+            toast.success('Contact removed from your list', {
+              duration: 3000,
+              style: {
+                background: '#10B981',
+                color: '#ffffff',
+                border: 'none',
+                borderRadius: '8px',
+              },
+            });
+          }
+          break;
+          
+        case 'retryLastAction':
+        case 'retryJoin':
+          // Retry the last action - could be contact refresh or specific contact action
+          if (contactId && session?.user?.id) {
+            // For now, just refresh contacts
+            dispatch(fetchContacts({
+              userId: session.user.id,
+              platform: 'telegram'
+            }));
+          }
+          break;
+          
+        case 'dismissError':
+          // Just dismiss - no action needed
+          break;
+          
+        default:
+          logger.warn('[telegramContactList] Unknown error action handler:', action.handler);
+      }
+    };
+
     window.addEventListener('platform-verification-start', handlePlatformVerificationStart as EventListener);
     window.addEventListener('platform-verification-end', handlePlatformVerificationEnd as EventListener);
     window.addEventListener('contact-auto-deleted', handleContactAutoDeleted as EventListener);
+    window.addEventListener('telegram:error', handleTelegramError as EventListener);
     
     return () => {
       window.removeEventListener('platform-verification-start', handlePlatformVerificationStart as EventListener);
       window.removeEventListener('platform-verification-end', handlePlatformVerificationEnd as EventListener);
       window.removeEventListener('contact-auto-deleted', handleContactAutoDeleted as EventListener);
+      window.removeEventListener('telegram:error', handleTelegramError as EventListener);
     };
   }, [dispatch]);
 
@@ -1845,6 +2416,28 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }: TelegramCon
         <div className="flex items-center justify-between">
           <CardTitle className="text-header-foreground font-bold text-xl">telegram Chats</CardTitle>
           <div className="flex items-center space-x-2 relative">
+            
+            {/* 🚀 NEW: Background contact sync progress indicator */}
+            {contactSyncState.isActive && contactSyncState.showInHeader && (
+              <div className="flex items-center space-x-2 bg-blue-500/10 px-3 py-1 rounded-md border border-blue-500/20">
+                <div className="w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                <div className="flex flex-col">
+                  <span className="text-blue-400 font-medium text-xs">
+                    {contactSyncState.message}
+                  </span>
+                  <div className="flex items-center space-x-2">
+                    <span className="text-blue-300 text-xs">
+                      {contactSyncState.progress}%
+                    </span>
+                    {contactSyncState.contactsFound !== undefined && (
+                      <span className="text-blue-300 text-xs">
+                        {contactSyncState.contactsProcessed || 0}/{contactSyncState.contactsFound} contacts
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
             {isRefreshing ? (
               <MdCloudSync className="animate-spin text-header-foreground w-6 h-6" />
             ) : refreshCooldown ? (
@@ -2039,12 +2632,10 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }: TelegramCon
                 >
                   <ContactItem
                     contact={contact}
-                    isSelected={contact.id === selectedContactId}
+                    onClick={() => handleContactSelectWithFeedback(contact)}
+                    isSelected={selectedContactId === contact.id}
                     notificationCount={notificationCount}
-                    onClick={() => {
-                      // This onClick is now handled by the parent div's events
-                      // Keep it here for compatibility but don't use it directly
-                    }}
+                    isLoading={contactLoadingStates[contact.id] || loadingContactId === contact.id}
                   />
                 </div>
               );

@@ -5,6 +5,7 @@ import api from '@/utils/api';
 import { toast } from 'react-hot-toast';
 import { useSelector, useDispatch } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
+import { format } from 'date-fns';
 // import { supabase } from '@/utils/supabase';
 import logger from '@/utils/logger';
 // import { MessageBatchProcessor } from '@/utils/MessageBatchProcessor';
@@ -474,6 +475,7 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }: {
   const offlineTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastSyncRef = useRef<any>(null);
   const syncTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isLoadingRef = useRef(false); // 🚀 NEW: Track loading state to prevent infinite loops
 
   // Constants
   const PAGE_SIZE = 50;
@@ -509,11 +511,20 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }: {
   const loadMessagesIntelligently = useCallback(async (contactId: string, forceRefresh = false) => {
     if (!contactId) return;
 
+    // 🚀 CRITICAL FIX: Prevent multiple simultaneous loads using ref
+    if (isLoadingRef.current && !forceRefresh) {
+      logger.info('[ChatView] Already loading (ref check), skipping duplicate request');
+      return;
+    }
+
     // 🚀 CRITICAL FIX: Prevent multiple simultaneous loads
     if (loading && !forceRefresh) {
       logger.info('[ChatView] Already loading, skipping duplicate request');
       return;
     }
+
+    // 🚀 Set loading flag
+    isLoadingRef.current = true;
 
     logger.info('[ChatView] 🚀 Smart message loading:', {
       contactId,
@@ -541,6 +552,7 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }: {
         processedMessages: messages.length,
         totalMessages: messages.length,
       }));
+      isLoadingRef.current = false; // 🚀 Reset loading flag
       return;
     }
 
@@ -608,8 +620,11 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }: {
         ],
       }));
       toast.error('Failed to load messages');
+    } finally {
+      // 🚀 CRITICAL: Always reset loading flag
+      isLoadingRef.current = false;
     }
-  }, [dispatch, loading, messages.length]); // 🚀 CRITICAL FIX: Simplified dependencies
+  }, [dispatch, hasCachedMessages, cacheFreshness, messages.length]); // 🚀 CRITICAL FIX: Removed loading dependency to prevent recreations
 
   // 🚀 ENHANCED: Smart message sending with optimistic updates
   const handleSendMessage = useCallback(async (message: { content: string; type?: string }) => {
@@ -845,8 +860,15 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }: {
           // 🚀 CRITICAL ENHANCEMENT: Use smart loading instead of aggressive clearing
           loadMessagesIntelligently(selectedContact.id);
         });
+    } else {
+      // 🚀 NEW: Handle non-join membership case
+      logger.info('[ChatView] Contact membership is not "join", attempting to load messages anyway:', {
+        contactId: selectedContact.id,
+        membership: selectedContact.membership
+      });
+      loadMessagesIntelligently(selectedContact.id);
     }
-  }, [dispatch, selectedContact?.id, selectedContact?.membership, loadMessagesIntelligently, hasCachedMessages, cacheFreshness, messages.length]);
+  }, [selectedContact?.id, selectedContact?.membership, hasCachedMessages, cacheFreshness?.isFresh]); // 🚀 CRITICAL FIX: Removed problematic dependencies
 
   useEffect(() => {
     if (!socket || !selectedContact?.id) return;
@@ -1248,6 +1270,54 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }: {
     }
   }, [connectionStatus]);
 
+  // 🚀 FIXED: Move useMemo and useCallback BEFORE renderMessages to fix React hooks violation
+  const groupedMessages = useMemo(() => {
+    const groups: { [key: string]: typeof messages } = {};
+    
+    messages.forEach(message => {
+      try {
+        const messageDate = new Date(message.timestamp);
+        const dateKey = format(messageDate, 'yyyy-MM-dd');
+        
+        if (!groups[dateKey]) {
+          groups[dateKey] = [];
+        }
+        groups[dateKey].push(message);
+      } catch (error) {
+        console.warn('[WhatsappChatView] Invalid message timestamp:', message.timestamp);
+        // Add to "unknown" group
+        if (!groups['unknown']) {
+          groups['unknown'] = [];
+        }
+        groups['unknown'].push(message);
+      }
+    });
+    
+    return groups;
+  }, [messages]);
+
+  // 🚀 FIXED: Move getDateLabel BEFORE renderMessages to fix React hooks violation
+  const getDateLabel = useCallback((dateKey: string) => {
+    if (dateKey === 'unknown') return 'Unknown Date';
+    
+    try {
+      const date = new Date(dateKey);
+      const today = new Date();
+      const yesterday = new Date();
+      yesterday.setDate(today.getDate() - 1);
+      
+      if (format(date, 'yyyy-MM-dd') === format(today, 'yyyy-MM-dd')) {
+        return 'Today';
+      } else if (format(date, 'yyyy-MM-dd') === format(yesterday, 'yyyy-MM-dd')) {
+        return 'Yesterday';
+      } else {
+        return format(date, 'MMM dd, yyyy');
+      }
+    } catch (error) {
+      return dateKey;
+    }
+  }, []);
+
   const renderMessages = useCallback(() => {
     // 🚀 CRITICAL FIX: Show loading only when actually loading, not when we have messages
     if ((loadingState === LOADING_STATES.INITIAL || loadingState === LOADING_STATES.CONNECTING) && messages.length === 0) {
@@ -1288,12 +1358,24 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }: {
     if (messages.length > 0) {
       return (
         <div className="space-y-2">
-          {messages.map((message: Message) => (
-            <MessageItem
-              key={`${message.id}_${message.message_id}_${message.timestamp}`}
-              message={message}
-            />
-          ))}
+          {Object.keys(groupedMessages)
+            .sort((a, b) => {
+              if (a === 'unknown') return 1;
+              if (b === 'unknown') return -1;
+              return new Date(a).getTime() - new Date(b).getTime();
+            })
+            .map(dateKey => (
+              <React.Fragment key={dateKey}>
+                {groupedMessages[dateKey].map((message: Message, index: number) => (
+                  <MessageItem
+                    key={`${message.id}_${message.message_id}_${message.timestamp}`}
+                    message={message}
+                    showDateSeparator={index === 0} // Show date separator only on first message of the day
+                    dateLabel={getDateLabel(dateKey)}
+                  />
+                ))}
+              </React.Fragment>
+            ))}
         </div>
       );
     }
@@ -1304,7 +1386,7 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }: {
         <LoadingChatView details={syncState.details} />
       </div>
     );
-  }, [loadingState, messages, currentUser, syncState.details]);
+  }, [loadingState, messages, syncState.details, groupedMessages, getDateLabel]);
 
   const renderAvatar = () => {
     return (
