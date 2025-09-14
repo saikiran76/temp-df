@@ -16,6 +16,7 @@ import useAvatarCache from '@/hooks/useAvatarCache';
 import '@/components/styles/ShakeAnimation.css';
 import platformManager from '@/services/PlatformManager';
 import ErrorMessage from '@/components/ui/ErrorMessage';
+import { useIsMobile } from '@/hooks/use-mobile';
 
 // Import shadcn UI components
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -70,6 +71,36 @@ const PriorityBubble = ({ priority }) => {
   );
 };
 
+// New PriorityBadge component similar to TelegramContactList
+const PriorityBadge = ({ priority }) => {
+  if (!priority) return null;
+  
+  const getVariantAndClass = () => {
+    switch (priority) {
+      case 'high':
+        return { variant: 'destructive', className: 'bg-red-500 text-white rounded' };
+      case 'medium':
+        return { variant: 'default', className: 'bg-yellow-500 bg-opacity-70 text-black rounded' };
+      case 'low':
+        return { variant: 'secondary', className: 'bg-green-600 text-white/80 rounded-lg' };
+      default:
+        return { variant: 'outline', className: 'bg-gray-400 bg-opacity-70 text-white rounded' };
+    }
+  };
+  
+  const { variant, className } = getVariantAndClass();
+  const label = priority.charAt(0).toUpperCase() + priority.slice(1);
+  
+  return (
+    <Badge 
+      variant={variant}
+      className={`text-xs font-medium py-0.5 px-2 rounded ${className}`}
+    >
+      {label} Priority
+    </Badge>
+  );
+};
+
 // Contact Avatar component
 const ContactAvatar = ({ contact, size = 40 }) => {
   const avatarUrl = contact.avatar_url || null;
@@ -89,7 +120,7 @@ const ContactAvatar = ({ contact, size = 40 }) => {
 };
 
 // Contact item component using shadcn components
-const ContactItem = memo(({ contact, onClick, isSelected }: { contact: any, onClick: Function, isSelected: any }) => {
+const ContactItem = memo(({ contact, onClick, isSelected }) => {
   const dispatch = useDispatch();
   const priority = useSelector(state => selectContactPriority(state, contact.id));
   const [isEditing, setIsEditing] = useState(false);
@@ -127,20 +158,15 @@ const ContactItem = memo(({ contact, onClick, isSelected }: { contact: any, onCl
 
   return (
     <div
-      className={`relative flex items-center px-4 py-3 cursor-pointer hover:bg-gray-100 ${
-        isSelected ? 'bg-gray-200' : ''
+      className={`p-4 rounded-lg mb-2 bg-gray-800/50 hover:bg-gray-700/50 shadow-md cursor-pointer transition-colors border border-gray-700/50 hover:border-gray-600 relative ${
+        isSelected ? 'bg-gray-700/50' : ''
       }`}
       onClick={onClick}
       onMouseEnter={() => setShowTooltip(true)}
       onMouseLeave={() => setShowTooltip(false)}
     >
-      <PriorityBubble priority={priority} />
-
       {showTooltip && (
-        <div className="absolute right-2 top-1/2 transform -translate-y-1/2 flex gap-2 bg-[#1a1b26] p-1 rounded shadow-lg z-10">
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
+        <div className="absolute right-2 top-2 flex gap-2">
                 <Button
                   onClick={handleEdit}
                   variant="ghost"
@@ -149,37 +175,19 @@ const ContactItem = memo(({ contact, onClick, isSelected }: { contact: any, onCl
                 >
                   <FiEdit3 size={20} />
                 </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>Edit contact name</p>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
                 <Button
                   onClick={handleDelete}
                   variant="ghost"
                   size="icon"
-                  className="h-8 w-8 p-0 text-neutral-800 bg-gradient-to-r from-[#61FD7D] to-[#25CF43] hover:text-white/70 hover:bg-neutral-900"
+            className="h-8 w-8 p-0 text-gray-400 hover:text-white"
                 >
                   <BiSolidHide size={20} />
                 </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>Hide contact</p>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
         </div>
       )}
-
-      <ContactAvatar contact={contact} size={40} />
-      
-      <div className="ml-3 flex-1 min-w-0">
-        <div className="flex justify-between items-start">
+      <div className="flex items-center gap-3">
+        <ContactAvatar contact={contact} />
+        <div className="flex-1 min-w-0">
           {isEditing ? (
             <Input
               ref={editInputRef}
@@ -187,25 +195,24 @@ const ContactItem = memo(({ contact, onClick, isSelected }: { contact: any, onCl
               value={editedName}
               onChange={(e) => setEditedName(e.target.value)}
               onKeyDown={handleNameSubmit}
-              className="bg-white text-black px-2 py-1 rounded w-full border border-gray-300"
+              className="bg-gray-700 text-white px-2 py-1 rounded w-full border border-gray-600"
               onClick={(e) => e.stopPropagation()}
               autoFocus
             />
           ) : (
-            <h3 className="text-black font-semibold text-base truncate">
-              {contact.display_name}
-            </h3>
-          )}
-          {contact.last_message_at && !isEditing && (
-            <span className="text-xs text-gray-500 flex-shrink-0 ml-2">
-              {format(new Date(contact.last_message_at), 'HH:mm')}
-            </span>
+            <>
+              <div className="flex items-center gap-2">
+                <div className="text-white font-medium truncate">{contact.display_name}</div>
+                {priority && <PriorityBadge priority={priority} />}
+              </div>
+              <div className="text-gray-400 text-sm truncate">{contact.last_message}</div>
+            </>
           )}
         </div>
-        {contact.last_message && !isEditing && (
-          <p className="text-sm text-black truncate">
-            {contact.last_message}
-          </p>
+        {!isEditing && contact.last_message_at && (
+          <div className="text-gray-400 text-xs flex-shrink-0">
+              {format(new Date(contact.last_message_at), 'HH:mm')}
+        </div>
         )}
       </div>
     </div>
@@ -282,6 +289,7 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
   const [refreshTooltip, setRefreshTooltip] = useState('');
   const refreshButtonRef = useRef(null);
   const syncStatusPollingRef = useRef(null);
+  const [refreshRequired, setRefreshRequired] = useState(true);
 
   const loadContactsWithRetry = useCallback(async (retryCount = 0) => {
     try {
@@ -466,6 +474,9 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
         setRefreshTooltip('');
       }, 3000);
     }
+
+    // When refresh is clicked, allow interactions
+    setRefreshRequired(false);
   };
 
   // Function to poll sync status
@@ -655,12 +666,23 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
   }, [dispatch, refreshCooldown, session]);
 
   const handleContactSelect = useCallback(async (contact) => {
+    // Prevent contact selection if refresh is required
+    if (refreshRequired) {
+      toast.info('Please refresh contacts first');
+      return;
+    }
+    
     try {
       logger.info('[WhatsAppContactList] Handling contact selection:', {
         contactId: contact.id,
         membership: contact?.membership,
         contact: contact
       });
+      
+      // Add mobile debugging
+      console.log('[DEBUG Mobile] Contact selected in WhatsApp list:', contact);
+      
+      // Remove tooltips immediately to prevent UI interference
       const tooltips = document.querySelectorAll('.tooltip');
       tooltips.forEach(t => t.remove());
 
@@ -677,10 +699,17 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
               });
               const updatedContact = response.data.contact || { ...contact, membership: 'join' };
               dispatch(updateContactMembership({ contactId: contact.id, updatedContact }));
+              
+              // Ensure selection is called with the updated contact
+              console.log('[DEBUG Mobile] Passing updated contact to parent:', updatedContact);
               onContactSelect(updatedContact);
             } else if (response.data?.joinedBefore) {
               logger.info('[WhatsAppContactList] Contact was already joined:', contact.id);
-              onContactSelect({ ...contact, membership: 'join' });
+              
+              // Make sure the contact has updated membership
+              const updatedContact = { ...contact, membership: 'join' };
+              console.log('[DEBUG Mobile] Contact already joined, selecting with updated membership:', updatedContact);
+              onContactSelect(updatedContact);
             } else {
               logger.warn('[WhatsAppContactList] Invite acceptance failed:', {
                 contactId: contact.id,
@@ -703,10 +732,12 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
           toast.error('You are banned from this chat');
           return;
         case 'join':
+          console.log('[DEBUG Mobile] Contact has join membership, selecting directly');
           onContactSelect({ ...contact });
           break;
         case undefined:
           logger.warn('[WhatsAppContactList] Contact has no membership state:', contact);
+          console.log('[DEBUG Mobile] Contact has no membership, selecting anyway');
           onContactSelect({ ...contact });
           break;
         default:
@@ -718,7 +749,7 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
       logger.error('[WhatsAppContactList] Error handling contact selection:', err);
       toast.error('Failed to select contact');
     }
-  }, [onContactSelect, dispatch]);
+  }, [onContactSelect, dispatch, refreshRequired]);
 
   // This function is used by child components via props
   const handleContactUpdate = useCallback((updatedContact) => {
@@ -879,45 +910,45 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
     );
   }, [filteredContacts, searchQuery]);
 
-  // Listen for platform change event that requires a contact refresh
+  // Check if the current platform is active and refresh if needed
   useEffect(() => {
-    const handlePlatformRefresh = (event: CustomEvent) => {
-      if (event.detail?.platform === 'whatsapp') {
-        logger.info('[WhatsappContactList] Received platform-contact-refresh event for WhatsApp');
-        // Trigger contact refresh
-        handleRefresh();
+    const checkAndRefreshIfActive = () => {
+      const activePlatform = localStorage.getItem('dailyfix_active_platform');
+      if (activePlatform === 'whatsapp') {
+        logger.info('[WhatsAppContactList] WhatsApp is the active platform, refreshing contacts');
+        loadContactsWithRetry();
       }
     };
     
-    window.addEventListener('platform-contact-refresh', handlePlatformRefresh as EventListener);
+    checkAndRefreshIfActive();
+    
+    const handlePlatformChange = () => {
+      // When platform changes, require refresh
+      setRefreshRequired(true);
+      checkAndRefreshIfActive();
+    };
+    
+    window.addEventListener('platform-connection-changed', handlePlatformChange);
+    window.addEventListener('refresh-platform-status', handlePlatformChange);
     
     return () => {
-      window.removeEventListener('platform-contact-refresh', handlePlatformRefresh as EventListener);
+      window.removeEventListener('platform-connection-changed', handlePlatformChange);
+      window.removeEventListener('refresh-platform-status', handlePlatformChange);
     };
-  }, [handleRefresh]);
-
-  useEffect(() => {
-    if (!session) {
-      logger.warn('[WhatsAppContactList] No session found, redirecting to login');
-      navigate('/login');
-      return;
-    }
-    loadContactsWithRetry();
-  }, [session, navigate, loadContactsWithRetry]);
+  }, [loadContactsWithRetry]);
 
   return (
-    <Card className="contact-list-container whatsapp-contact-list flex flex-col h-full w-[100%] md:w-full border-none shadow-none rounded-lg">
-      {/* Header */}
-      <CardHeader className="p-4 bg-neutral-900 border-b border-gray-200">
+    <Card className="flex flex-col h-full w-full border-none shadow-none rounded-lg bg-[#1C1C1C] opacity-90 relative">
+      <CardHeader className="p-4 bg-[#075E55] border-b border-gray-200">
         <div className="flex items-center justify-between">
-          <CardTitle className="text-[#ece5dd] font-bold text-xl">Chats</CardTitle>
+          <CardTitle className="text-white font-bold text-xl">WhatsApp Chats</CardTitle>
           <div className="flex items-center space-x-2 relative">
             {isRefreshing ? (
-              <MdCloudSync className="animate-spin text-[#66b5ac] w-6 h-6" />
+              <MdCloudSync className="animate-spin text-white w-6 h-6" />
             ) : refreshCooldown ? (
-              <MdCloudSync className="text-[#66b5ac] w-6 h-6 pulse-animation" />
+              <MdCloudSync className="text-white w-6 h-6 pulse-animation" />
             ) : (
-              <FiRefreshCw className="text-[#66b5ac] w-6 h-6" />
+              <FiRefreshCw className="text-white w-6 h-6" />
             )}
             <div className="flex flex-col">
               <Button
@@ -925,28 +956,26 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
                 onClick={handleRefresh}
                 disabled={loading || isRefreshing}
                 variant="ghost"
-                className={`bg-neutral-900 border-white/10 text-white inline-flex px-3 py-1 md:py-2 items-center justify-center rounded-2xl text-sm ${
-                  loading || isRefreshing ? 'opacity-50 cursor-not-allowed' : 'hover:opacity-70'
-                } ${refreshCooldown ? 'bg-gray-700' : ''}`}
-                onMouseEnter={() => refreshCooldown && setRefreshTooltip('Sync in progress')}
+                className={`bg-[#075E55] border-[#064C44] text-white inline-flex px-3 py-1 items-center justify-center rounded-lg text-sm ${
+                  loading || isRefreshing ? 'opacity-50 cursor-not-allowed' : 'hover:bg-[#064C44]'
+                } ${refreshCooldown ? 'bg-[#064C44]' : ''} ${refreshRequired ? 'animate-pulse bg-blue-700 hover:bg-blue-600' : ''}`}
+                onMouseEnter={() => refreshCooldown ? setRefreshTooltip('Sync in progress') : refreshRequired && setRefreshTooltip('Click to refresh contacts')}
                 onMouseLeave={() => setRefreshTooltip('')}
               >
-                {isRefreshing ? 'Syncing...' : refreshCooldown ? 'Syncing...' : 'Refresh'}
+                {isRefreshing ? 'Syncing...' : refreshCooldown ? 'Syncing...' : refreshRequired ? 'Refresh Required' : 'Refresh'}
                 {syncProgress && syncProgress.state === SYNC_STATES.SYNCING && syncProgress.progress > 0 && (
                   <span className="ml-1 text-xs">{syncProgress.progress}%</span>
                 )}
               </Button>
-
-              {/* Progress bar */}
               {syncProgress && syncProgress.state === SYNC_STATES.SYNCING && (
                 <Progress 
                   value={syncProgress.progress || 0} 
-                  className="h-1 w-full bg-neutral-700"
+                  className="h-1 w-full bg-[#064C44]"
                 />
               )}
             </div>
             {refreshTooltip && (
-              <div className="absolute top-full mt-2 right-0 bg-black text-white text-xs rounded py-1 px-2 z-10">
+              <div className="absolute top-full mt-2 right-0 bg-gray-800 text-white text-xs rounded py-1 px-2 z-10">
                 {refreshTooltip}
               </div>
             )}
@@ -980,12 +1009,12 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
       </div>
 
       {/* Contact List */}
-      <CardContent className="flex-1 overflow-y-auto bg-white p-0">
+      <CardContent className="flex-1 overflow-y-auto p-4">
         {loading ? (
           <ShimmerContactList />
         ) : error ? (
           <div className="flex flex-col items-center justify-center p-4">
-            <ErrorMessage message={`Failed to load contacts: ${error}`} />
+            {/* <ErrorMessage message={`Failed to load contacts: ${error}`} /> */}
             <Button
               onClick={() => loadContactsWithRetry()}
               variant="default"
@@ -996,14 +1025,23 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
           </div>
         ) : !searchedContacts?.length ? (
           <div className="flex flex-col items-center justify-center p-4 h-full min-h-[300px]">
-            <p className="text-gray-500">
-              {searchQuery
-                ? `No contacts found matching "${searchQuery}"`
-                : syncProgress
-                  ? 'Syncing contacts...'
-                  : 'Application syncs new contacts with new messages 🔃'
-              }
+            {searchQuery ? (
+              <p className="text-gray-500">No contacts found matching "{searchQuery}"</p>
+            ) : syncProgress ? (
+              <p className="text-gray-500">Syncing contacts...</p>
+            ) : (
+              <>
+                <img 
+                  src="https://miro.medium.com/v2/resize:fit:1100/format:webp/0*d94Rn5bObhShU7YV.gif" 
+                  alt="Waiting for contacts" 
+                  className="w-32 h-32 mb-4"
+                />
+                <p className="text-gray-500 text-center">
+                  Application syncs new contacts with new messages.<br />
+                  Keep track of the refresh button
             </p>
+              </>
+            )}
           </div>
         ) : (
           <div className="contact-list divide-y divide-gray-200">
@@ -1012,9 +1050,40 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
                 key={contact.id}
                 contact={contact}
                 isSelected={contact.id === selectedContactId}
-                onClick={() => handleContactSelect(contact)}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  console.log('[DEBUG Mobile] Contact clicked:', contact.display_name);
+                  handleContactSelect(contact);
+                }}
+                className="cursor-pointer active:bg-gray-700 hover:bg-gray-700 transition-colors duration-200"
+                onTouchStart={(e) => e.currentTarget.classList.add('bg-gray-700')}
+                onTouchEnd={(e) => {
+                  e.currentTarget.classList.remove('bg-gray-700');
+                  e.preventDefault();
+                  handleContactSelect(contact);
+                }}
               />
             ))}
+          </div>
+        )}
+        
+        {/* Overlay that prevents interaction until refreshed */}
+        {refreshRequired && !loading && (
+          <div className="absolute inset-0 bg-black/50 flex items-center justify-center z-20">
+            <div className="bg-white p-6 rounded-lg text-center max-w-sm">
+              <FiRefreshCw className="mx-auto text-[#075E55] w-10 h-10 mb-4 animate-spin" />
+              <h3 className="text-gray-900 font-bold text-xl mb-2">Refresh Required</h3>
+              <p className="text-gray-700 mb-4">
+                Please refresh your contacts to continue
+              </p>
+              <Button
+                onClick={handleRefresh}
+                className="bg-[#075E55] hover:bg-[#064C44] text-white"
+              >
+                Refresh Now
+              </Button>
+            </div>
           </div>
         )}
       </CardContent>

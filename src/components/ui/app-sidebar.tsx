@@ -160,7 +160,7 @@ export function AppSidebar({
     >
       <Sidebar
         collapsible="none"
-        className={`${isMobile ? '!w-auto max-w-[240px]' : '!w-[calc(var(--sidebar-width-icon)_+_1px)]'} border-r`}
+        className={`${isMobile ? '!w-auto max-w-[240px]' : '!w-[calc(var(--sidebar-width-icon)_+_2px)]'} border-r  border-gray-800 whatsapp-glowing-border`}
       >
         <SidebarHeader className="px-2 py-3">
           <div className={`flex ${isMobile ? 'w-full justify-start gap-2' : 'aspect-square size-8 justify-center'} items-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground ${isMobile ? '' : 'mx-auto'}`}>

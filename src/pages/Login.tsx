@@ -18,6 +18,7 @@ import { Input } from '@/components/ui/input';
 import { Separator } from "@/components/ui/separator";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AlertCircle, X, Eye, EyeOff } from "lucide-react";
+import { Label } from "@/components/ui/label";
 
 // Background image
 const bgImage = "https://searchengineland.com/wp-content/seloads/2023/12/The-top-5-social-media-platforms-you-should-focus-on.png";
@@ -142,53 +143,24 @@ const Login = () => {
   }
 
   return (
-    <div className="min-h-screen flex flex-row bg-black text-white">
-      {/* Left column - Brand and testimonial - Hidden on mobile */}
-      <div 
-        className="hidden md:flex md:w-2/5 lg:w-1/2 flex-col justify-between p-6 lg:p-12 border-r border-gray-800 relative" 
-        style={{
-          background: 'linear-gradient(to right, #3a6073, #3a7bd5)'
-        }}
-      >
-        {/* Background image with opacity */}
-        <div 
-          className="absolute inset-0 opacity-40 z-0" 
-          style={{
-            backgroundImage: `url(${bgImage})`,
-            backgroundSize: 'cover',
-            backgroundPosition: 'center',
-          }}
-        ></div>
-        
-        <div className="mt-6 lg:mt-12 relative z-10">
-          <h1 className="text-2xl lg:text-3xl font-bold">DailyFix</h1>
-        </div>
-        
-        <div className="mb-12 lg:mb-24 relative z-10">
-          <blockquote className="text-lg lg:text-xl leading-relaxed">
-            "This library has saved me countless hours of work and helped me deliver stunning designs to my clients faster than ever before."
-          </blockquote>
-          <div className="mt-4">
-            <p className="text-gray-400">Sofia Davis</p>
-          </div>
-        </div>
-      </div>
-      
-      {/* Right column - Authentication - Full width on mobile */}
-      <div className="w-full md:w-3/5 lg:w-1/2 flex items-center justify-center p-6 md:p-8">
-        {/* Logo on mobile only */}
-        <div className="md:hidden flex justify-center w-full mb-8">
-          <h1 className="text-2xl font-bold">DailyFix</h1>
-        </div>
-        
-        <div className="w-full max-w-md px-4 sm:px-8">
-          <div className="mb-8">
-            <h2 className="text-2xl sm:text-3xl font-semibold mb-2">Login</h2>
-            <p className="text-gray-400">Enter your email below to login to your account</p>
+    <div className="grid min-h-screen bg-black text-white lg:grid-cols-2">
+      <div className="flex flex-col items-center justify-center p-6 md:p-10">
+        <div className="w-full max-w-sm">
+          <div className="mb-8 flex justify-center lg:justify-start">
+            <Link to="/" className="text-2xl font-bold">
+              DailyFix
+            </Link>
           </div>
           
+          <div className="space-y-2 text-center lg:text-left">
+            <h1 className="text-2xl font-bold">Login</h1>
+            <p className="text-sm text-gray-400">
+              Enter your email below to login to your account
+            </p>
+          </div>
+
           {(localError || error) && (
-            <Alert variant="destructive" className="mb-6">
+            <Alert variant="destructive" className="mt-6">
               <AlertCircle className="h-5 w-5" />
               <AlertDescription className="ml-3 flex-1 text-sm">
                 {localError || error}
@@ -199,100 +171,107 @@ const Login = () => {
               />
             </Alert>
           )}
-          
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="space-y-2">
-              <label htmlFor="email" className="block text-sm text-gray-400">
-                Email
-              </label>
-              <Input
-                id="email"
-                type="email"
-                placeholder="name@example.com"
-                value={email}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setEmail(e.target.value)}
-                className="w-full bg-gray-900 border-gray-700 rounded-md"
-                required
-              />
-            </div>
-            
-            <div className="space-y-2">
-              <div className="flex justify-between">
-                <label htmlFor="password" className="block text-sm text-gray-400">
-                  Password
-                </label>
-                <Link 
-                  to="/forgot-password" 
-                  className="text-sm text-primary hover:underline"
-                >
-                  Forgot password?
-                </Link>
-              </div>
-              <div className="relative">
+
+          <div className="mt-6 space-y-6">
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="email" className="">Email</Label>
                 <Input
-                  id="password"
-                  type={showPassword ? "text" : "password"}
-                  placeholder="••••••••"
-                  value={password}
-                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setPassword(e.target.value)}
+                  id="email"
+                  type="email"
+                  placeholder="name@example.com"
+                  value={email}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setEmail(e.target.value)}
                   className="w-full bg-gray-900 border-gray-700 rounded-md"
                   required
                 />
-                <button
-                  type="button"
-                  className="absolute bg-transparent right-3 top-1/2 transform -translate-y-1/2 text-gray-400"
-                  onClick={() => setShowPassword(!showPassword)}
-                  tabIndex={-1}
-                >
-                  {showPassword ? (
-                    <EyeOff className="h-4 w-4" />
-                  ) : (
-                    <Eye className="h-4 w-4" />
-                  )}
-                </button>
+              </div>
+              
+              <div className="space-y-2">
+                <div className="flex items-center">
+                  <Label htmlFor="password" className="">Password</Label>
+                  <Link 
+                    to="/forgot-password" 
+                    className="ml-auto text-sm text-primary hover:underline underline-offset-4"
+                  >
+                    Forgot password?
+                  </Link>
+                </div>
+                <div className="relative">
+                  <Input
+                    id="password"
+                    type={showPassword ? "text" : "password"}
+                    placeholder="••••••••"
+                    value={password}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setPassword(e.target.value)}
+                    className="w-full bg-gray-900 border-gray-700 rounded-md"
+                    required
+                  />
+                  <button
+                    type="button"
+                    className="absolute bg-transparent right-3 top-1/2 transform -translate-y-1/2 text-gray-400"
+                    onClick={() => setShowPassword(!showPassword)}
+                    tabIndex={-1}
+                  >
+                    {showPassword ? (
+                      <EyeOff className="h-4 w-4" />
+                    ) : (
+                      <Eye className="h-4 w-4" />
+                    )}
+                  </button>
+                </div>
+              </div>
+              
+              <Button type="submit" className="w-full">
+                Login
+              </Button>
+            </form>
+            
+            <div className="relative">
+              <div className="absolute inset-0 flex items-center">
+                <Separator className="border-gray-700" />
+              </div>
+              <div className="relative flex justify-center text-xs uppercase">
+                <span className="bg-black px-2 text-gray-500">
+                  Or continue with
+                </span>
               </div>
             </div>
             
             <Button
-              type="submit"
-              className="w-full h-10 mt-2 bg-white text-black hover:bg-gray-200"
-              variant="default"
+              type="button"
+              onClick={handleGoogleSignIn}
+              variant="outline"
+              className="w-full"
             >
-              Sign in with Email
-            </Button>
-          </form>
-          
-          <div className="my-6">
-            <div className="relative">
-              <div className="absolute inset-0 flex items-center">
-                <Separator className="w-full border-gray-800" />
-              </div>
-              <div className="relative flex justify-center">
-                <span className="bg-black px-2 text-xs text-gray-500 uppercase">OR CONTINUE WITH</span>
-              </div>
-            </div>
-          </div>
-          
-          <Button
-            type="button"
-            onClick={handleGoogleSignIn}
-            variant="outline"
-            className="w-full h-10 border border-gray-800 text-gray-300 hover:bg-gray-900"
-          >
-            <span className="flex items-center justify-center">
               <FcGoogle className="mr-2 h-5 w-5" />
               Google
-            </span>
-          </Button>
-          
-          <div className="text-center mt-6">
-            <p className="text-sm text-gray-400">
+            </Button>
+            
+            <div className="text-center text-sm text-gray-400">
               Don't have an account?{" "}
-              <Link to="/signup" className="text-primary hover:underline">
+              <Link to="/signup" className="text-primary hover:underline underline-offset-4">
                 Sign up
               </Link>
-            </p>
+            </div>
           </div>
+        </div>
+      </div>
+      <div className="relative hidden lg:block">
+        <img
+          src={bgImage}
+          alt="A person using multiple social media apps on their phone"
+          className="absolute inset-0 h-full w-full object-cover brightness-50"
+        />
+        <div className="relative z-10 flex h-full flex-col justify-end p-10 text-white">
+            <div className="mb-12 lg:mb-24">
+                <blockquote className="text-lg lg:text-xl leading-relaxed">
+                    "This platform streamlined all my social media interactions into one place. Truly a game-changer for my productivity!"
+                </blockquote>
+                <div className="mt-4">
+                    <p className="text-gray-400">Alex Johnson</p>
+                </div>
+            </div>
         </div>
       </div>
     </div>

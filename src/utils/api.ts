@@ -3,7 +3,7 @@ import { getSupabaseClient } from './supabase';
 import logger from './logger';
 // Remove direct import of store to break circular dependency
 // import { store } from '@/store/store';
-import { updateSession } from '@/store/slices/authSlice';
+// import { updateSession } from '@/store/slices/authSlice';
 
 // Standard response structure
 export const ResponseStatus = {
@@ -240,7 +240,7 @@ api.interceptors.response.use(
 );
 
 // Helper method to get current auth state
-api.getAuthState = async () => {
+export const getAuthState = async () => {
   try {
     const token = await getAccessToken();
     if (!token) return null;

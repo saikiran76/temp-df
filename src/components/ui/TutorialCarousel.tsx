@@ -22,7 +22,7 @@ type TutorialStep = {
 
 export const TutorialCarousel: React.FC<TutorialCarouselProps> = ({ onComplete, onSkip }) => {
   const [currentStep, setCurrentStep] = useState(0);
-  const totalSteps = 5;
+  const totalSteps = 6;
   const [api, setApi] = useState(null);
 
   // Tutorial slides data
@@ -41,6 +41,12 @@ export const TutorialCarousel: React.FC<TutorialCarouselProps> = ({ onComplete, 
         <FaTelegram className="h-16 w-16 text-blue-500" />
       </div>,
       content: "Use the platform switcher in the sidebar to connect and switch between your messaging accounts."
+    },
+    {
+      title: "Understanding Contact Syncing",
+      description: "Important information about how contacts appear in DailyFix.",
+      icon: <RefreshCw className="h-16 w-16 text-orange-500 mx-auto mb-4" />,
+      content: "WhatsApp contact syncing starts when our servers detect new messages. If you don't see contacts after logging in, don't worry - it doesn't mean login failed. Keep an eye on the refresh button in the chat header to manually sync your contacts."
     },
     {
       title: "Manage Your Contacts",

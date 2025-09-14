@@ -211,7 +211,29 @@ export const getSupabaseClient = () => {
 
 // For backward compatibility, but this shouldn't be used for new code
 // We need a getter approach to avoid creating a client upon import
-export const supabase = null;
+// export const supabase = getSupabaseClient();
 
-// Always use getSupabaseClient() instead of direct import
+// For backward compatibility - a proxy to the actual client
+export const supabase = {
+  auth: {
+    getSession: async () => {
+      const client = getSupabaseClient();
+      return client ? client.auth.getSession() : { data: null, error: new Error('Supabase client not available') };
+    },
+    refreshSession: async (params: { refresh_token: string }) => {
+      const client = getSupabaseClient();
+      return client ? client.auth.refreshSession(params) : { data: null, error: new Error('Supabase client not available') };
+    },
+    signInWithPassword: async (params: { email: string, password: string }) => {
+      const client = getSupabaseClient();
+      return client ? client.auth.signInWithPassword(params) : { data: null, error: new Error('Supabase client not available') };
+    },
+    signOut: async () => {
+      const client = getSupabaseClient();
+      return client ? client.auth.signOut() : { error: new Error('Supabase client not available') };
+    }
+  }
+};
+
+// Default export for newer code
 export default getSupabaseClient;

@@ -225,12 +225,28 @@ export default function Page() {
   // Handle contact selection
   const handleContactSelect = (contact: Contact) => {
     logger.info(`[MainLayout] Contact selected: ${contact.id}, ${contact.display_name}`);
+    // Add explicit debugging
+    console.log('[DEBUG] Contact selected:', contact);
+    console.log('[DEBUG] Current view state:', { isMobile, selectedContactId, activeContactList });
+    
+    // Set selected contact information
     setSelectedContactId(contact.id);
     setSelectedContact(contact);
+    
+    // Force update for mobile view
+    if (isMobile) {
+      console.log('[DEBUG] Forcing mobile chat view update');
+      // Use a slight delay to ensure state updates properly
+      setTimeout(() => {
+        const updatedState = { isMobile, selectedContactId: contact.id, contact };
+        console.log('[DEBUG] Updated mobile state:', updatedState);
+      }, 100);
+    }
   }
   
   // Handle chat close
   const handleChatClose = () => {
+    console.log('[DEBUG] Closing chat view');
     setSelectedContactId(null);
     setSelectedContact(null);
   }
@@ -337,7 +353,13 @@ export default function Page() {
   };
 
   return (
-    <SidebarProvider className="h-screen whatsapp-glowing-border">
+    <SidebarProvider 
+      className="h-screen"
+      defaultOpen={false}
+      open={false}
+      onOpenChange={() => {}}
+      style={{}}
+    >
       <AppSidebar
         onWhatsAppSelected={handleWhatsAppSelected}
         onTelegramSelected={handleTelegramSelected}
@@ -345,11 +367,11 @@ export default function Page() {
         onSettingsSelected={() => setSettingsOpen(true)}
         onPlatformConnect={() => setSettingsOpen(true)}
       />
-      <SidebarInset>
+      <SidebarInset className="">
         {/* Header */}
         <header className="flex h-16 shrink-0 items-center gap-2 bg-[#131516] p-4">
           {!isMobile || (!selectedContact && !settingsOpen) ? (
-            <SidebarTrigger className="-ml-1" />
+            <SidebarTrigger className="-ml-1" onClick={() => {}} />
           ) : (
             selectedContact && (
               <Button
@@ -425,6 +447,16 @@ export default function Page() {
               >
                 <div className="flex-1 flex flex-col p-4 overflow-hidden rounded-lg">
                   {/* Inbox content */}
+                  {!isPlatformConnected && (
+                    <div className="flex flex-col items-center justify-center h-full gap-6">
+                      <div className="w-full max-w-md rounded-lg overflow-hidden mb-4">
+                        <img src="https://cdni.iconscout.com/illustration/premium/thumb/nothing-here-yet-illustration-download-in-svg-png-gif-file-formats--404-page-not-found-planet-space-empty-state-pack-science-technology-illustrations-6763396.png" alt="NP"/>
+                      </div>
+                      <p className="text-gray-400 text-center text-lg">
+                        No platforms connected, go ahead and connect to a platform in Settings
+                      </p>
+                    </div>
+                  )}
                   {isPlatformConnected && !activeContactList && (
                     <div className="flex flex-col gap-6">
                       <div className="rounded-lg overflow-hidden">
@@ -458,7 +490,7 @@ export default function Page() {
             <>
               {/* Mobile: Either show contact list OR chat view, but not both */}
               {isMobile && selectedContact ? (
-                <div className="flex-1 h-full">
+                <div className="flex-1 h-full w-full bg-[#1C1C1C]">
                   {activeContactList === 'whatsapp' ? (
                     <WhatsAppChatView
                       selectedContact={selectedContact}
@@ -481,7 +513,17 @@ export default function Page() {
                         onClose={handleChatClose}
                       />
                     </div>
-                  ) : null}
+                  ) : (
+                    // Fallback content in case neither WhatsApp nor Telegram is active
+                    <div className="flex items-center justify-center h-full p-4 text-center">
+                      <div>
+                        <p className="text-gray-400 mb-4">No active chat selected or invalid platform.</p>
+                        <Button variant="outline" onClick={handleChatClose}>
+                          Return to contacts
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <>
@@ -495,6 +537,16 @@ export default function Page() {
                   >
                     <div className="flex-1 flex flex-col p-4 overflow-auto rounded-lg">
                       {/* Inbox content */}
+                      {!isPlatformConnected && (
+                        <div className="flex flex-col items-center justify-center h-full gap-6">
+                          <div className="w-full max-w-md rounded-lg overflow-hidden mb-4">
+                          <img src="https://cdni.iconscout.com/illustration/premium/thumb/nothing-here-yet-illustration-download-in-svg-png-gif-file-formats--404-page-not-found-planet-space-empty-state-pack-science-technology-illustrations-6763396.png" alt="NP"/>
+                          </div>
+                          <p className="text-gray-400 text-center text-lg">
+                            No platforms connected, go ahead and connect to a platform in Settings
+                          </p>
+                        </div>
+                      )}
                       {isPlatformConnected && !activeContactList && (
                         <div className="flex flex-col gap-6">
                           <div className="rounded-lg overflow-hidden">

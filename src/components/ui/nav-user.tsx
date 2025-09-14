@@ -7,7 +7,7 @@ import {
   Sparkles,
   User as UserIcon
 } from "lucide-react"
-import { useSelector } from "react-redux"
+import { useSelector, useDispatch } from "react-redux"
 import { useNavigate } from "react-router-dom"
 import { useState } from "react"
 
@@ -43,11 +43,14 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { useIsMobile } from "@/hooks/use-mobile"
+import { signOut } from "@/store/slices/authSlice"
+import type { AppDispatch } from "@/store/store"
 
 export function NavUser() {
   const { isMobile } = useSidebar()
   const isMobileDevice = useIsMobile()
   const navigate = useNavigate()
+  const dispatch = useDispatch<AppDispatch>()
   
   // State for logout confirmation dialog
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
@@ -71,19 +74,16 @@ export function NavUser() {
   }
   
   // Handle logout confirmation
-  const confirmLogout = () => {
-    // Clear auth data
-    localStorage.removeItem("authToken")
-    localStorage.removeItem("user")
-    
-    // Show success message
-    toast.success("Logged out successfully")
-    
-    // Navigate to login page
-    navigate("/login")
-    
-    // Close dialog
-    setShowLogoutConfirm(false)
+  const confirmLogout = async () => {
+    try {
+      await dispatch(signOut()).unwrap();
+      toast.success("Logged out successfully");
+      navigate("/login");
+    } catch (error: any) {
+      toast.error(error.message || "Failed to log out");
+    } finally {
+      setShowLogoutConfirm(false);
+    }
   }
 
   return (
@@ -121,8 +121,8 @@ export function NavUser() {
               sideOffset={8} 
               className="w-56 bg-black text-white border border-gray-800"
             >
-              <DropdownMenuLabel className="p-2">
-                <div className="flex items-center gap-2">
+              <DropdownMenuLabel>
+                <div className="flex items-center gap-2 p-2">
                   <Avatar className="h-8 w-8 rounded-lg">
                     {userData.avatar ? (
                       <AvatarImage src={userData.avatar} alt={userData.name} className="object-cover" />
@@ -140,8 +140,8 @@ export function NavUser() {
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
               <DropdownMenuGroup>
-                <div
-                  className="cursor-pointer focus:bg-neutral-800 hover:bg-neutral-800 transition-colors duration-200 flex items-center gap-2 px-2 py-1.5 rounded-sm text-sm"
+                <DropdownMenuItem
+                  className="cursor-pointer focus:bg-neutral-800 hover:bg-neutral-800"
                   onClick={(e) => {
                     e.preventDefault()
                     handleFeatureClick("Upgrade to Pro")
@@ -149,12 +149,12 @@ export function NavUser() {
                 >
                   <Sparkles className="mr-2 h-4 w-4 text-yellow-400" />
                   <span>Upgrade to Pro</span>
-                </div>
+                </DropdownMenuItem>
               </DropdownMenuGroup>
               <DropdownMenuSeparator />
               <DropdownMenuGroup>
-                <div
-                  className="cursor-pointer focus:bg-neutral-800 hover:bg-neutral-800 transition-colors duration-200 flex items-center gap-2 px-2 py-1.5 rounded-sm text-sm"
+                <DropdownMenuItem
+                  className="cursor-pointer focus:bg-neutral-800 hover:bg-neutral-800"
                   onClick={(e) => {
                     e.preventDefault()
                     handleFeatureClick("Account")
@@ -162,9 +162,9 @@ export function NavUser() {
                 >
                   <UserIcon className="mr-2 h-4 w-4 text-blue-400" />
                   <span>Account</span>
-                </div>
-                <div
-                  className="cursor-pointer focus:bg-neutral-800 hover:bg-neutral-800 transition-colors duration-200 flex items-center gap-2 px-2 py-1.5 rounded-sm text-sm"
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  className="cursor-pointer focus:bg-neutral-800 hover:bg-neutral-800"
                   onClick={(e) => {
                     e.preventDefault()
                     handleFeatureClick("Billing")
@@ -172,9 +172,9 @@ export function NavUser() {
                 >
                   <CreditCard className="mr-2 h-4 w-4 text-green-400" />
                   <span>Billing</span>
-                </div>
-                <div
-                  className="cursor-pointer focus:bg-neutral-800 hover:bg-neutral-800 transition-colors duration-200 flex items-center gap-2 px-2 py-1.5 rounded-sm text-sm"
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  className="cursor-pointer focus:bg-neutral-800 hover:bg-neutral-800"
                   onClick={(e) => {
                     e.preventDefault()
                     handleFeatureClick("Notifications")
@@ -182,11 +182,11 @@ export function NavUser() {
                 >
                   <Bell className="mr-2 h-4 w-4 text-purple-400" />
                   <span>Notifications</span>
-                </div>
+                </DropdownMenuItem>
               </DropdownMenuGroup>
               <DropdownMenuSeparator />
-              <div
-                className="cursor-pointer focus:bg-red-600 hover:bg-red-600 text-white transition-colors duration-200 flex items-center gap-2 px-2 py-1.5 rounded-sm text-sm"
+              <DropdownMenuItem
+                className="cursor-pointer focus:bg-red-600 hover:bg-red-600 text-white"
                 onClick={(e) => {
                   e.preventDefault()
                   setShowLogoutConfirm(true)
@@ -194,7 +194,7 @@ export function NavUser() {
               >
                 <LogOut className="mr-2 h-4 w-4" />
                 <span>Log out</span>
-              </div>
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </SidebarMenuItem>

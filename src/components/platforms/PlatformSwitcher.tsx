@@ -76,35 +76,28 @@ export const PlatformSwitcher = ({
       localStorage.setItem('dailyfix_active_platform', platformId);
       logger.info(`[PlatformSwitcher] Set ${platformId} as active platform in localStorage`);
       
-      // Trigger proper contact refresh based on the platform
-      // This will reload the contacts for the new platform when it's loaded
-      const userId = JSON.parse(localStorage.getItem('dailyfix_auth') || '{}')?.user?.id;
-      if (userId) {
-        // Trigger both events: platform change notification and contact refresh
-        window.dispatchEvent(new CustomEvent('platform-contact-refresh', {
-          detail: {
-            platform: platformId,
-            userId: userId,
-            timestamp: Date.now()
+      // Use setTimeout to ensure this runs after all synchronous code,
+      // preventing potential initialization order issues
+      setTimeout(() => {
+        try {
+          // Trigger proper contact refresh based on the platform
+          const userId = JSON.parse(localStorage.getItem('dailyfix_auth') || '{}')?.user?.id;
+          if (userId) {
+            // Dispatch a simple custom event - avoid complex event details to prevent serialization issues
+            window.dispatchEvent(new CustomEvent('platform-connection-changed'));
+            
+            // Use a simple refresh event instead of one with complex details
+            const refreshEvent = new CustomEvent('refresh-platform-status');
+            window.dispatchEvent(refreshEvent);
+            logger.info(`[PlatformSwitcher] Auto-refreshed contacts after switching to ${platformId}`);
           }
-        }));
-        
-        // Also dispatch the standard platform change event for other components
-        window.dispatchEvent(new CustomEvent('platform-connection-changed', {
-          detail: {
-            platform: platformId,
-            isActive: true,
-            timestamp: Date.now()
-          }
-        }));
-      }
+        } catch (error) {
+          logger.error('[PlatformSwitcher] Error during platform switch event dispatching:', error);
+        }
+      }, 0);
       
-      // Show toast notification about the platform switch
-      toast("Platform Switched", {
-        description: `Switched to ${platformId.charAt(0).toUpperCase() + platformId.slice(1)}. Contacts will be refreshed.`,
-        icon: <RefreshCw className="h-5 w-5" />,
-        duration: 4000,
-      });
+      // Show a simple toast notification - avoid complex objects that might cause initialization issues
+      toast(`Switched to ${platformId.charAt(0).toUpperCase() + platformId.slice(1)}. PLEASE HIT REFRESH BUTTON.`);
       
       logger.info(`[PlatformSwitcher] Showed platform switch notification for ${platformId}`);
     }

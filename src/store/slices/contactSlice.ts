@@ -1,7 +1,9 @@
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
+import type { PayloadAction } from '@reduxjs/toolkit';
 import contactService from '@/services/contactService';
 import logger from '@/utils/logger';
 import { isWhatsAppConnected } from '@/utils/connectionStorage';
+import type { RootState } from '../store';
 
 // Add priority constants
 export const PRIORITY_LEVELS = {
@@ -135,9 +137,10 @@ export const freshSyncContacts = createAsyncThunk(
 // Add new action for updating priority
 export const updateContactPriority = createAsyncThunk(
   'contacts/updatePriority',
-  async ({ contactId, priority }, { rejectWithValue, getState }) => {
+  async ({ contactId, priority }: { contactId: string, priority: string }, { rejectWithValue, getState }) => {
     try {
-      const contact = getState().contacts.items.find((c: any) => c.id === contactId);
+      const state = getState() as RootState;
+      const contact = state.contacts.items.find((c: any) => c.id === contactId);
       if (!contact) {
         throw new Error('Contact not found');
       }
@@ -152,16 +155,18 @@ export const updateContactPriority = createAsyncThunk(
 
 // Slice definition
 const initialState = {
-  items: [],
+  items: [] as any[],
   loading: false,
-  error: null,
+  error: null as string | null,
   syncStatus: {
     inProgress: false,
-    lastSyncTime: null,
-    error: null
+    lastSyncTime: null as number | null,
+    error: null as string | null
   },
   initialLoadComplete: false,
-  priorityMap: {} // New field for storing priorities
+  priorityMap: {} as Record<string, { priority: string, lastUpdated: number }>,
+  isRefreshing: false,
+  lastSync: null as number | null,
 };
 
 const contactSlice = createSlice({
@@ -301,7 +306,7 @@ const contactSlice = createSlice({
       })
       .addCase(fetchContacts.rejected, (state, action) => {
         state.loading = false;
-        state.error = action.payload || 'Failed to fetch contacts';
+        state.error = action.payload as string || 'Failed to fetch contacts';
         state.initialLoadComplete = true;
         logger.info('[Contacts] Contacts fetch failed:', action.payload);
       })
@@ -331,11 +336,11 @@ const contactSlice = createSlice({
       })
       // Handle rehydration
       .addCase('persist/REHYDRATE', (state, action) => {
-        if (action.payload?.contacts) {
+        if ((action as any).payload?.contacts) {
           // Merge existing priorities with rehydrated ones
           state.priorityMap = {
             ...state.priorityMap,
-            ...action.payload.contacts.priorityMap
+            ...(action as any).payload.contacts.priorityMap
           };
         }
       })
@@ -353,7 +358,7 @@ const contactSlice = createSlice({
       .addCase(freshSyncContacts.rejected, (state, action) => {
         state.loading = false;
         state.isRefreshing = false;
-        state.error = action.payload;
+        state.error = action.payload as string | 'Failed to sync contacts';
       });
   }
 });

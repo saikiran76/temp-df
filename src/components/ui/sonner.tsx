@@ -4,30 +4,21 @@ import { Toaster as Sonner } from "sonner"
 const Toaster = ({
   ...props
 }) => {
-  const { theme = "dark" } = useTheme()
-
+  // Use a fixed theme to avoid initialization issues
   return (
-    (<Sonner
-      theme={theme as "dark" | "light" | "system"}
+    <Sonner
+      theme="dark"
       className="toaster group"
       toastOptions={{
         classNames: {
-          toast:
-            "group toast group-[.toaster]:bg-blue-900/20 group-[.toaster]:text-blue-200 group-[.toaster]:border-border group-[.toaster]:shadow-lg group-[.toaster]:font-['IBM_Plex_Sans',_sans-serif]",
-          description: "group-[.toast]:text-muted-foreground group-[.toast]:font-['IBM_Plex_Sans',_sans-serif]",
-          actionButton:
-            "group-[.toast]:bg-primary group-[.toast]:text-primary-foreground group-[.toast]:font-['IBM_Plex_Sans',_sans-serif]",
-          cancelButton:
-            "group-[.toast]:bg-muted group-[.toast]:text-muted-foreground group-[.toast]:font-['IBM_Plex_Sans',_sans-serif]",
+          toast: "group toast group-[.toaster]:bg-blue-900/20 group-[.toaster]:text-blue-200 group-[.toaster]:border-border group-[.toaster]:shadow-lg",
+          description: "group-[.toast]:text-muted-foreground",
+          actionButton: "group-[.toast]:bg-primary group-[.toast]:text-primary-foreground",
+          cancelButton: "group-[.toast]:bg-muted group-[.toast]:text-muted-foreground",
         },
       }}
-      style={{
-        position: 'fixed',
-        top: '50%',
-        left: '50%',
-        transform: 'translate(-50%, -50%)',
-      }}
-      {...props} />)
+      {...props} 
+    />
   );
 }
 

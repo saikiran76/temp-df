@@ -106,7 +106,17 @@ function App() {
   useEffect(() => {
     const handleSessionExpired = (event: CustomEvent) => {
       logger.info('[App] Session expired event received:', event.detail);
-      setShowSessionExpiredModal(true);
+      
+      // Check if this is an intentional logout
+      const isIntentionalLogout = localStorage.getItem('intentional_logout') === 'true';
+      
+      if (!isIntentionalLogout) {
+        // Only show the session expired modal if it's not an intentional logout
+        logger.info('[App] Showing session expired modal');
+        setShowSessionExpiredModal(true);
+      } else {
+        logger.info('[App] Intentional logout detected, not showing session expired modal');
+      }
     };
 
     // Add event listener

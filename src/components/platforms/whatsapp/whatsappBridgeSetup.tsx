@@ -994,7 +994,7 @@ const WhatsappBridgeSetup = ({ onComplete, onCancel, relogin = false }: Whatsapp
           <CardTitle className="text-2xl font-bold text-white">Connection Error</CardTitle>
         </CardHeader>
         <CardContent>
-          <ErrorMessage message={errorMessage} />
+          {/* <ErrorMessage message={errorMessage} /> */}
           {showRetryButton && (
             <Button 
               variant="destructive" 

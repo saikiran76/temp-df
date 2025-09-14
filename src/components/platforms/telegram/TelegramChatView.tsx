@@ -54,7 +54,7 @@ import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import ErrorMessage from '@/components/ui/ErrorMessage';
 import ChatBackgroundSettings, { getChatBackground } from '@/components/ui/ChatBackgroundSettings';
-// import { Badge } from "@/components/ui/badge";
+import { Badge } from "@/components/ui/badge";
 // import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 // import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 // import telegramInfoPanel from './telegramInfoPanel';
@@ -122,6 +122,37 @@ const spinVariants = {
       ease: "linear"
     }
   }
+};
+
+// Priority Badge component
+const PriorityBadge = ({ priority, onClick }) => {
+  if (!priority) return null;
+  
+  const getVariantAndClass = () => {
+    switch (priority) {
+      case 'high':
+        return { variant: 'destructive', className: 'bg-red-500 text-white rounded' };
+      case 'medium':
+        return { variant: 'default', className: 'bg-yellow-500 bg-opacity-70 text-black rounded' };
+      case 'low':
+        return { variant: 'default', className: 'bg-green-600 text-white/80 rounded-lg' };
+      default:
+        return { variant: 'outline', className: 'bg-gray-400 bg-opacity-70 text-white rounded' };
+    }
+  };
+  
+  const { variant, className } = getVariantAndClass();
+  const label = priority.charAt(0).toUpperCase() + priority.slice(1);
+  
+  return (
+    <Badge 
+      variant={variant}
+      className={`text-xs font-medium py-0.5 px-2 rounded cursor-pointer ${className} hover:opacity-80`}
+      onClick={onClick}
+    >
+      {label} Priority
+    </Badge>
+  );
 };
 
 const SyncProgressIndicator = ({ syncState, loadingState }) => {
@@ -217,7 +248,7 @@ const SocketErrorFallback = ({ onRetry }) => {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <ErrorMessage message="Check your internet connection and try again." />
+          {/* <ErrorMessage message="Check your internet connection and try again." /> */}
         </CardContent>
         <CardFooter className="flex flex-col space-y-2">
           <Button 
@@ -1071,7 +1102,8 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
     if (loadingState === LOADING_STATES.ERROR) {
       return (
         <div className="flex flex-col items-center justify-center h-full">
-          <ErrorMessage message={error || 'Failed to load messages'} />
+          {/* <ErrorMessage message={error || 'Failed to load messages'} /> */}
+          <Alert>{error || 'Failed to load Messages'}</Alert>
         </div>
       );
     }
@@ -1164,23 +1196,17 @@ const ChatView = ({ selectedContact, onContactUpdate, onClose }) => {
             <h2 className="font-medium">{selectedContact?.display_name || 'Unknown'}</h2>
             <div className="flex items-center space-x-2 text-xs text-gray-200">
               {renderConnectionStatus()}
-              {/* Priority Dropdown */}
-              <select
-                value={priority || selectedContact.metadata?.priority || 'medium'}
-                onChange={(e) => handlePriorityChange(e.target.value)}
-                className="bg-neutral-800 bg-opacity-70 text-white text-xs rounded-md border border-[#25D366] px-2 py-0.5 appearance-none cursor-pointer hover:bg-[#064D45] focus:outline-none"
-                style={{
-                  backgroundImage: `url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%23FFFFFF' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e")`,
-                  backgroundPosition: 'right 0.5rem center',
-                  backgroundRepeat: 'no-repeat',
-                  backgroundSize: '1em 1em',
-                  paddingRight: '2rem',
+              {/* Priority Badge replacing dropdown */}
+              <PriorityBadge 
+                priority={priority || selectedContact.metadata?.priority || 'medium'} 
+                onClick={() => {
+                  // Cycle through priorities: low -> medium -> high -> low
+                  const currentPriority = priority || selectedContact.metadata?.priority || 'medium';
+                  const nextPriority = currentPriority === 'low' ? 'medium' : 
+                                      currentPriority === 'medium' ? 'high' : 'low';
+                  handlePriorityChange(nextPriority);
                 }}
-              >
-                <option value="low" className="text-white bg-[#075E54]">Low</option>
-                <option value="medium" className="text-white bg-[#075E54]">Medium</option>
-                <option value="high" className="text-white bg-[#075E54]">High</option>
-              </select>
+              />
             </div>
           </div>
         </div>

@@ -218,7 +218,7 @@ function Sidebar({
           // Adjust the padding for floating and inset variants.
           variant === "floating" || variant === "inset"
             ? "p-2 group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4))+2px)]"
-            : "group-data-[collapsible=icon]:w-(--sidebar-width-icon) group-data-[side=left]:border-r group-data-[side=right]:border-l",
+            : "group-data-[collapsible=icon]:w-(--sidebar-width-icon) group-data-[side=left]:border-r border-gray-800 group-data-[side=right]:border-l",
           className
         )}
         {...props}>
@@ -708,7 +708,13 @@ function SidebarAccount() {
               {user?.user_metadata?.avatar_url ? (
                 <AvatarImage src={user.user_metadata.avatar_url} alt="User" />
               ) : null}
-              <AvatarFallback>{getUserInitials()}</AvatarFallback>
+              <AvatarFallback>
+                {user?.user_metadata?.avatar_url ? (
+                  getUserInitials()
+                ) : (
+                  <User className="h-4 w-4 text-gray-500" />
+                )}
+              </AvatarFallback>
             </Avatar>
           </div>
           <div className="flex flex-col overflow-hidden">

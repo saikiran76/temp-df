@@ -94,7 +94,7 @@ const PriorityBadge = ({ priority }) => {
 };
 
 // Contact item component using shadcn components
-const ContactItem = memo(({ contact, onClick, isSelected }: { contact: any, onClick: Function, isSelected: any }) => {
+const ContactItem = memo(({ contact, onClick, isSelected }) => {
   const dispatch = useDispatch();
   const priority = useSelector(state => selectContactPriority(state, contact.id));
   const [isEditing, setIsEditing] = useState(false);
@@ -132,57 +132,36 @@ const ContactItem = memo(({ contact, onClick, isSelected }: { contact: any, onCl
 
   return (
     <div
-      className={`relative flex items-center px-4 py-3 cursor-pointer hover:bg-gray-100 ${
-        isSelected ? 'bg-gray-200' : ''
+      className={`p-4 rounded-lg mb-2 bg-gray-800/50 hover:bg-gray-700/50 cursor-pointer transition-colors border border-gray-700/50 hover:border-gray-600 relative ${
+        isSelected ? 'bg-gray-700/50' : ''
       }`}
       onClick={onClick}
       onMouseEnter={() => setShowTooltip(true)}
       onMouseLeave={() => setShowTooltip(false)}
     >
       {showTooltip && (
-        <div className="absolute right-2 top-1/2 transform -translate-y-1/2 flex gap-2 bg-[#1a1b26] p-1 rounded shadow-lg z-10">
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  onClick={handleEdit}
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 p-0 text-gray-400 hover:text-white"
-                >
-                  <FiEdit3 size={20} />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>Edit contact name</p>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  onClick={handleDelete}
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 p-0 text-neutral-800 bg-gradient-to-r from-[#61FD7D] to-[#25CF43] hover:text-white/70 hover:bg-neutral-900"
-                >
-                  <BiSolidHide size={20} />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>Hide contact</p>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+        <div className="absolute right-2 top-2 flex gap-2">
+          <Button
+            onClick={handleEdit}
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 p-0 text-gray-400 hover:text-white"
+          >
+            <FiEdit3 size={20} />
+          </Button>
+          <Button
+            onClick={handleDelete}
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 p-0 text-gray-400 hover:text-white"
+          >
+            <BiSolidHide size={20} />
+          </Button>
         </div>
       )}
-
-      <ContactAvatar contact={contact} size={40} />
-      
-      <div className="ml-3 flex-1 min-w-0">
-        <div className="flex justify-between items-start">
+      <div className="flex items-center gap-3">
+        <ContactAvatar contact={contact} />
+        <div className="flex-1 min-w-0">
           {isEditing ? (
             <Input
               ref={editInputRef}
@@ -190,32 +169,24 @@ const ContactItem = memo(({ contact, onClick, isSelected }: { contact: any, onCl
               value={editedName}
               onChange={(e) => setEditedName(e.target.value)}
               onKeyDown={handleNameSubmit}
-              className="bg-white text-black px-2 py-1 rounded w-full border border-gray-300"
+              className="bg-gray-700 text-white px-2 py-1 rounded w-full border border-gray-600"
               onClick={(e) => e.stopPropagation()}
               autoFocus
             />
           ) : (
-            <div className="flex flex-col">
-              <h3 className="text-black font-semibold text-base truncate">
-                {contact.display_name}
-              </h3>
-              {priority && (
-                <div className="mt-0.5">
-                  <PriorityBadge priority={priority} />
-                </div>
-              )}
-            </div>
-          )}
-          {contact.last_message_at && !isEditing && (
-            <span className="text-xs text-gray-500 flex-shrink-0 ml-2">
-              {format(new Date(contact.last_message_at), 'HH:mm')}
-            </span>
+            <>
+              <div className="flex items-center gap-2">
+                <div className="text-white font-medium truncate">{contact.display_name}</div>
+                {priority && <PriorityBadge priority={priority} />}
+              </div>
+              <div className="text-gray-400 text-sm truncate">{contact.last_message}</div>
+            </>
           )}
         </div>
-        {contact.last_message && !isEditing && (
-          <p className="text-sm text-black truncate mt-1">
-            {contact.last_message}
-          </p>
+        {!isEditing && contact.last_message_at && (
+          <div className="text-gray-400 text-xs flex-shrink-0">
+            {format(new Date(contact.last_message_at), 'HH:mm')}
+          </div>
         )}
       </div>
     </div>
@@ -286,10 +257,10 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
   const [showAcknowledgment, setShowAcknowledgment] = useState(false);
   const [hasShownAcknowledgment, setHasShownAcknowledgment] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  // syncRequestId is used in the refreshContacts function
   const [syncRequestId, setSyncRequestId] = useState(null);
   const [refreshCooldown, setRefreshCooldown] = useState(false);
   const [refreshTooltip, setRefreshTooltip] = useState('');
+  const [refreshRequired, setRefreshRequired] = useState(true);
   const refreshButtonRef = useRef(null);
   const syncStatusPollingRef = useRef(null);
 
@@ -337,9 +308,7 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
   }, [dispatch, syncProgress, session, navigate]);
 
   const handleRefresh = async () => {
-    // Check if we're in cooldown period
     if (refreshCooldown) {
-      // IMPROVED: More engaging messages when clicking refresh multiple times
       const messages = [
         'Whoa there! Still refreshing, give it a moment...',
         'Patience, young padawan. Contacts are still syncing...',
@@ -350,7 +319,6 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
       const randomMessage = messages[Math.floor(Math.random() * messages.length)];
       setRefreshTooltip(randomMessage);
 
-      // Shake the button to provide visual feedback
       if (refreshButtonRef.current) {
         refreshButtonRef.current.classList.add('shake-animation');
         setTimeout(() => {
@@ -360,12 +328,14 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
       return;
     }
 
-    // Check if we've refreshed recently (within 3 seconds)
     const now = Date.now();
     if (now - lastManualRefreshTime < 3000) {
       toast.info('Please wait a moment before refreshing again');
       return;
     }
+
+    // When refresh is clicked, allow interactions
+    setRefreshRequired(false);
 
     // CRITICAL FIX: Set a timeout to ensure we don't get stuck
     const syncTimeout = setTimeout(() => {
@@ -661,11 +631,16 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
   }, [dispatch, refreshCooldown, session]);
 
   const handleContactSelect = useCallback(async (contact) => {
+    // Prevent contact selection if refresh is required
+    if (refreshRequired) {
+      toast.info('Please refresh contacts first');
+      return;
+    }
+    
     try {
       logger.info('[telegramContactList] Handling contact selection:', {
         contactId: contact.id,
         membership: contact?.membership,
-        contact: contact
       });
       const tooltips = document.querySelectorAll('.tooltip');
       tooltips.forEach(t => t.remove());
@@ -716,7 +691,7 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
       logger.error('[telegramContactList] Error handling contact selection:', err);
       toast.error('Failed to select contact');
     }
-  }, [onContactSelect, dispatch]);
+  }, [onContactSelect, dispatch, refreshRequired]);
 
   // This function is used by child components via props
   const handleContactUpdate = useCallback((updatedContact) => {
@@ -885,53 +860,44 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
     );
   }, [filteredContacts, searchQuery]);
 
-  // Listen for platform change event that requires a contact refresh
   useEffect(() => {
-    const handlePlatformRefresh = (event: CustomEvent) => {
-      if (event.detail?.platform === 'telegram') {
-        logger.info('[TelegramContactList] Received platform-contact-refresh event for Telegram');
-        // Trigger contact refresh
-        handleRefresh();
+    const checkAndRefreshIfActive = () => {
+      const activePlatform = localStorage.getItem('dailyfix_active_platform');
+      if (activePlatform === 'telegram') {
+        logger.info('[TelegramContactList] Telegram is the active platform, refreshing contacts');
+        loadContactsWithRetry();
       }
     };
     
-    window.addEventListener('platform-contact-refresh', handlePlatformRefresh as EventListener);
+    checkAndRefreshIfActive();
+    
+    const handlePlatformChange = () => {
+      // When platform changes, require refresh
+      setRefreshRequired(true);
+      checkAndRefreshIfActive();
+    };
+    
+    window.addEventListener('platform-connection-changed', handlePlatformChange);
+    window.addEventListener('refresh-platform-status', handlePlatformChange);
     
     return () => {
-      window.removeEventListener('platform-contact-refresh', handlePlatformRefresh as EventListener);
+      window.removeEventListener('platform-connection-changed', handlePlatformChange);
+      window.removeEventListener('refresh-platform-status', handlePlatformChange);
     };
-  }, [handleRefresh]);
-
-  useEffect(() => {
-    if (!session) {
-      logger.warn('[telegramContactList] No session found, redirecting to login');
-      navigate('/login');
-      return;
-    }
-    
-    // CRITICAL FIX: Check if Telegram is the active platform
-    const activeContactList = localStorage.getItem('dailyfix_active_platform');
-    if (activeContactList !== 'telegram') {
-      logger.info('[telegramContactList] Telegram is not the active platform, skipping initialization');
-      return;
-    }
-    
-    loadContactsWithRetry();
-  }, [session, navigate, loadContactsWithRetry]);
+  }, [loadContactsWithRetry]);
 
   return (
-    <Card className="contact-list-container telegram-contact-list flex flex-col h-full w-[100%] md:w-full border-none shadow-none rounded-lg">
-      {/* Header */}
-      <CardHeader className="p-4 bg-neutral-900 border-b border-gray-200">
+    <Card className="flex flex-col h-full w-full border-none shadow-none rounded-lg bg-gray-900 relative">
+      <CardHeader className="p-4 bg-gray-800 border-b border-gray-800">
         <div className="flex items-center justify-between">
-          <CardTitle className="text-[#ece5dd] font-bold text-xl">Chats</CardTitle>
+          <CardTitle className="text-white font-bold text-xl">Telegram Chats</CardTitle>
           <div className="flex items-center space-x-2 relative">
             {isRefreshing ? (
-              <MdCloudSync className="animate-spin text-[#66b5ac] w-6 h-6" />
+              <MdCloudSync className="animate-spin text-blue-500 w-6 h-6" />
             ) : refreshCooldown ? (
-              <MdCloudSync className="text-[#66b5ac] w-6 h-6 pulse-animation" />
+              <MdCloudSync className="text-blue-500 w-6 h-6 pulse-animation" />
             ) : (
-              <FiRefreshCw className="text-[#66b5ac] w-6 h-6" />
+              <FiRefreshCw className="text-blue-500 w-6 h-6" />
             )}
             <div className="flex flex-col">
               <Button
@@ -939,28 +905,26 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
                 onClick={handleRefresh}
                 disabled={loading || isRefreshing}
                 variant="ghost"
-                className={`bg-neutral-900 border-white/10 text-white inline-flex px-3 py-1 md:py-2 items-center justify-center rounded-2xl text-sm ${
-                  loading || isRefreshing ? 'opacity-50 cursor-not-allowed' : 'hover:opacity-70'
-                } ${refreshCooldown ? 'bg-gray-700' : ''}`}
-                onMouseEnter={() => refreshCooldown && setRefreshTooltip('Sync in progress')}
+                className={`bg-gray-800 border-gray-700 text-white inline-flex px-3 py-1 items-center justify-center rounded-lg text-sm ${
+                  loading || isRefreshing ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-700'
+                } ${refreshCooldown ? 'bg-gray-700' : ''} ${refreshRequired ? 'animate-pulse bg-blue-700 hover:bg-blue-600' : ''}`}
+                onMouseEnter={() => refreshCooldown ? setRefreshTooltip('Sync in progress') : refreshRequired && setRefreshTooltip('Click to refresh contacts')}
                 onMouseLeave={() => setRefreshTooltip('')}
               >
-                {isRefreshing ? 'Syncing...' : refreshCooldown ? 'Syncing...' : 'Refresh'}
+                {isRefreshing ? 'Syncing...' : refreshCooldown ? 'Syncing...' : refreshRequired ? 'Refresh Required' : 'Refresh'}
                 {syncProgress && syncProgress.state === SYNC_STATES.SYNCING && syncProgress.progress > 0 && (
                   <span className="ml-1 text-xs">{syncProgress.progress}%</span>
                 )}
               </Button>
-
-              {/* Progress bar */}
               {syncProgress && syncProgress.state === SYNC_STATES.SYNCING && (
                 <Progress 
                   value={syncProgress.progress || 0} 
-                  className="h-1 w-full bg-neutral-700"
+                  className="h-1 w-full bg-gray-700"
                 />
               )}
             </div>
             {refreshTooltip && (
-              <div className="absolute top-full mt-2 right-0 bg-black text-white text-xs rounded py-1 px-2 z-10">
+              <div className="absolute top-full mt-2 right-0 bg-gray-800 text-white text-xs rounded py-1 px-2 z-10">
                 {refreshTooltip}
               </div>
             )}
@@ -994,7 +958,7 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
       </div>
 
       {/* Contact List */}
-      <CardContent className="flex-1 overflow-y-auto bg-white p-0">
+      <CardContent className="flex-1 overflow-y-auto bg-gray-900 p-6">
         {loading ? (
           <ShimmerContactList />
         ) : error ? (
@@ -1010,14 +974,23 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
           </div>
         ) : !searchedContacts?.length ? (
           <div className="flex flex-col items-center justify-center p-4 h-full min-h-[300px]">
-            <p className="text-gray-500">
-              {searchQuery
-                ? `No contacts found matching "${searchQuery}"`
-                : syncProgress
-                  ? 'Syncing contacts...'
-                  : 'Application syncs new contacts with new messages 🔃'
-              }
-            </p>
+            {searchQuery ? (
+              <p className="text-gray-500">No contacts found matching "{searchQuery}"</p>
+            ) : syncProgress ? (
+              <p className="text-gray-500">Syncing contacts...</p>
+            ) : (
+              <>
+                <img 
+                  src="https://miro.medium.com/v2/resize:fit:1100/format:webp/0*d94Rn5bObhShU7YV.gif" 
+                  alt="Waiting for contacts" 
+                  className="w-32 h-32 mb-4"
+                />
+                <p className="text-gray-500 text-center">
+                  Application syncs new contacts with new messages.<br />
+                  Keep track of the refresh button
+                </p>
+              </>
+            )}
           </div>
         ) : (
           <div className="contact-list divide-y divide-gray-200">
@@ -1029,6 +1002,25 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
                 onClick={() => handleContactSelect(contact)}
               />
             ))}
+          </div>
+        )}
+        
+        {/* Overlay that prevents interaction until refreshed */}
+        {refreshRequired && !loading && (
+          <div className="absolute inset-0 bg-black/50 flex items-center justify-center z-20">
+            <div className="bg-gray-800 p-6 rounded-lg text-center max-w-sm">
+              <FiRefreshCw className="mx-auto text-blue-500 w-10 h-10 mb-4 animate-spin" />
+              <h3 className="text-white font-bold text-xl mb-2">Refresh Required</h3>
+              <p className="text-gray-300 mb-4">
+                Please refresh your contacts to continue
+              </p>
+              <Button
+                onClick={handleRefresh}
+                className="bg-blue-600 hover:bg-blue-700 text-white"
+              >
+                Refresh Now
+              </Button>
+            </div>
           </div>
         )}
       </CardContent>

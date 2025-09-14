@@ -5,9 +5,6 @@ import LavaLamp from '@/components/ui/Loader/LavaLamp';
 interface CentralLoaderProps {
   message?: string;
   subMessage?: string;
-  showButton?: boolean;
-  buttonText?: string;
-  onButtonClick?: () => void;
 }
 
 /**
@@ -15,10 +12,7 @@ interface CentralLoaderProps {
  */
 const CentralLoader: React.FC<CentralLoaderProps> = ({
   message = 'Loading...',
-  subMessage,
-  showButton = false,
-  buttonText = 'Continue',
-  onButtonClick
+  subMessage
 }) => {
   return (
     <div className="fixed inset-0 flex items-center justify-center bg-background/95 backdrop-blur-sm z-50">
@@ -37,15 +31,6 @@ const CentralLoader: React.FC<CentralLoaderProps> = ({
           <p className="text-sm text-muted-foreground mb-4">
             {subMessage}
           </p>
-        )}
-        
-        {showButton && (
-          <button 
-            onClick={onButtonClick}
-            className="mt-4 px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
-          >
-            {buttonText}
-          </button>
         )}
       </motion.div>
     </div>

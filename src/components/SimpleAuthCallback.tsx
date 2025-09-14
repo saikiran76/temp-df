@@ -280,7 +280,7 @@ const SimpleAuthCallback = () => {
           onClick={handleManualContinue}
           className="w-full py-2 px-4 bg-white text-black font-medium rounded-md hover:bg-gray-200 focus:outline-none transition-colors"
         >
-          {error ? 'Return to Login' : 'Continue to Onboarding'}
+          {/* {error ? 'Return to Login' : 'Continue to Onboarding'} */}
         </Button>
       </CardContent>
     </Card>

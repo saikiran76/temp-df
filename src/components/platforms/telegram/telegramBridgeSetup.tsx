@@ -398,7 +398,7 @@ const TelegramBridgeSetup = ({ onComplete, onCancel, relogin = false }: Telegram
         
         // Create request data/params based on relogin status
         const requestConfig: RequestConfig = {
-          timeout: 60000 // 60 second timeout instead of 40 seconds to prevent hanging
+          timeout: 90000 // 90 second timeout instead of 40 seconds to prevent hanging
         };
         
         // Add login_type parameter if this is a relogin
@@ -946,7 +946,7 @@ const TelegramBridgeSetup = ({ onComplete, onCancel, relogin = false }: Telegram
           <CardTitle className="text-2xl font-bold text-white">Connection Error</CardTitle>
         </CardHeader>
         <CardContent>
-          <ErrorMessage message={errorMessage} />
+          {/* <ErrorMessage message={errorMessage} /> */}
           {showRetryButton && (
             <Button 
               variant="destructive" 

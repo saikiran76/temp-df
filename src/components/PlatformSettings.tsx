@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { RefreshCw, Loader2, Images, HelpCircle, BookOpen } from "lucide-react";
 import platformManager from '@/services/PlatformManager';
 import { useSelector } from 'react-redux';
-import WhatsAppBridgeSetup from '@/components/platforms/whatsapp/whatsappBridgeSetup';
+import WhatsAppBridgeSetup, { resetWhatsappSetupFlags } from '@/components/platforms/whatsapp/whatsappBridgeSetup';
 import { toast } from 'react-hot-toast';
 import api from '@/utils/api';
 import { saveWhatsAppStatus, saveTelegramStatus } from '@/utils/connectionStorage';
@@ -38,7 +38,8 @@ const PlatformItem = ({
   subtitle,
   requiresAuth,
   isInitializing,
-  isDisconnecting
+  isDisconnecting,
+  disabled
 }: { 
   platform: string; 
   isConnected: boolean; 
@@ -49,6 +50,7 @@ const PlatformItem = ({
   requiresAuth?: boolean;
   isInitializing?: boolean;
   isDisconnecting?: boolean;
+  disabled?: boolean;
 }) => {
   return (
     <div className="flex items-center justify-between px-4 py-6">
@@ -74,12 +76,15 @@ const PlatformItem = ({
         {isDisconnecting && (
           <Loader2 className="h-4 w-4 text-red-500 animate-spin mr-2" />
         )}
+        {disabled && !isInitializing && !isDisconnecting && (
+          <span className="text-sm text-gray-400 mr-2">Setup in progress</span>
+        )}
         <Checkbox 
           id={`toggle-${platform}`}
           checked={isConnected}
           onCheckedChange={(checked) => onToggle(platform, checked as boolean)}
           className="data-[state=checked]:bg-blue-600"
-          disabled={isInitializing || isDisconnecting}
+          disabled={disabled || isInitializing || isDisconnecting}
         />
       </div>
     </div>
@@ -261,6 +266,8 @@ const PlatformSettings = () => {
   const handleWhatsAppSetupCancel = () => {
     setShowWhatsAppSetup(false);
     setInitializingPlatform(null);
+    logger.info('[PlatformSettings] WhatsApp setup cancelled, resetting flags.');
+    resetWhatsappSetupFlags(true);
   };
 
   // Handle Telegram setup completion
@@ -275,6 +282,8 @@ const PlatformSettings = () => {
   const handleTelegramSetupCancel = () => {
     setShowTelegramSetup(false);
     setInitializingPlatform(null);
+    logger.info('[PlatformSettings] Telegram setup cancelled, resetting flags.');
+    resetTelegramSetupFlags(true);
   };
 
   // Add the missing confirmDisconnect function
@@ -321,6 +330,9 @@ const PlatformSettings = () => {
     }
   };
 
+  // Calculate if any setup is in progress
+  const anySetupInProgress = initializingPlatform !== null || showWhatsAppSetup || showTelegramSetup || isDisconnecting || showDisconnectDialog;
+
   return (
     <div className=" bg-[#131516] space-y-6">
       <Tabs defaultValue="accounts" className="w-full">
@@ -345,7 +357,7 @@ const PlatformSettings = () => {
             </Button>
           </div>
           
-          <div className="rounded-lg overflow-hidden bg-black/50 chat-glowing-border">
+          <div className="rounded-lg overflow-hidden bg-black/50 whatsapp-glowing-border">
             {availablePlatforms.map(platform => {
               const meta = platformMeta[platform as keyof typeof platformMeta];
               const isConnected = activePlatforms.includes(platform);
@@ -362,6 +374,7 @@ const PlatformSettings = () => {
                   requiresAuth={meta.requiresAuth}
                   isInitializing={initializingPlatform === platform}
                   isDisconnecting={isDisconnecting && disconnectingPlatform === platform}
+                  disabled={anySetupInProgress}
                 />
               );
             })}
@@ -428,7 +441,7 @@ const PlatformSettings = () => {
           <div className="mb-6">
             <h2 className="text-xl font-bold uppercase tracking-wide text-gray-200 mb-6">APPEARANCE</h2>
             
-            <div className="rounded-lg  overflow-hidden bg-black/50 mb-6 chat-glowing-border">
+            <div className="rounded-lg  overflow-hidden bg-black/50 mb-6 whatsapp-glowing-border">
               {/* Theme Settings */}
               <div className="border-b border-gray-800">
                 <div className="flex items-center justify-between p-4">
@@ -507,7 +520,7 @@ const PlatformSettings = () => {
             
             <div className="space-y-6">
               {/* Welcome Section */}
-              <Card className="bg-black/50 chat-glowing-border overflow-hidden">
+              <Card className="bg-black/50 whatsapp-glowing-border overflow-hidden">
                 <CardHeader>
                   <CardTitle className="flex items-center">
                     <BookOpen className="mr-2 h-5 w-5 text-blue-500" />
@@ -637,7 +650,7 @@ const PlatformSettings = () => {
               </Card>
               
               {/* Help & Support Section */}
-              <Card className="bg-black/50 chat-glowing-border overflow-hidden">
+              <Card className="bg-black/50 whatsapp-glowing-border overflow-hidden">
                 <CardHeader>
                   <CardTitle>Help & Support</CardTitle>
                   <CardDescription>Need assistance? We're here to help</CardDescription>

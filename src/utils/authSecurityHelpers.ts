@@ -45,7 +45,7 @@ export function setupCSP(): void {
         style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
         img-src 'self' data: https://* blob:;
         font-src 'self' https://fonts.gstatic.com;
-        connect-src 'self' http://localhost:* https://localhost:* ws://localhost:* wss://localhost:* https://*.supabase.co wss://*.supabase.co https://*.googleapis.com https://api.dailyfix.io;
+        connect-src 'self' http://localhost:* https://localhost:* ws://localhost:* wss://localhost:* https://*.supabase.co wss://*.supabase.co https://*.googleapis.com https://api.dailyfix.io https://*.dailyfix-api-gateway.duckdns.org https://dailyfix-api-gateway.duckdns.org;
         frame-src 'self' https://*.supabase.co;
       `.replace(/\s+/g, ' ').trim();
     } else {
@@ -57,7 +57,7 @@ export function setupCSP(): void {
         style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
         img-src 'self' data: https://* blob:;
         font-src 'self' https://fonts.gstatic.com;
-        connect-src 'self' https://*.supabase.co wss://*.supabase.co wss://* ws://* https://*.googleapis.com https://api.dailyfix.io;
+        connect-src 'self' https://*.supabase.co wss://*.supabase.co wss://* ws://* https://*.googleapis.com https://api.dailyfix.io https://*.dailyfix-api-gateway.duckdns.org https://dailyfix-api-gateway.duckdns.org;
         frame-src 'self' https://*.supabase.co;
       `.replace(/\s+/g, ' ').trim();
     }
